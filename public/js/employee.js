@@ -411,17 +411,7 @@ async function profilePage(root) {
       <div class="row">${icon('phone')}<span class="grow sub">Phone</span><b>${esc(u.phone)}</b></div>
       <div class="row">${icon('user')}<span class="grow sub">Employee ID</span><b>${esc(u.empId)}</b></div>
       <div class="row">${icon('scan')}<span class="grow sub">Face</span><span class="chip ${u.hasFace ? 'green' : 'orange'}">${u.hasFace ? 'Registered' : 'Not registered'}</span></div></div>
-    <button class="btn block" id="pw">${icon('lock')} Change password</button>
     <button class="btn block danger" id="out">${icon('logout')} Sign out</button></div>`);
-  $('#pw', root).addEventListener('click', () => {
-    modal({ title: 'Change password', body: `<form class="col" id="pf" style="gap:14px;padding-bottom:8px"><div class="field"><label>Current password</label><input class="input" type="password" name="current" autocomplete="current-password"></div>
-      <div class="field"><label>New password</label><input class="input" type="password" name="password" autocomplete="new-password"><span class="hint">8+ characters with a letter and a number</span></div></form>`,
-      footer: `<button class="btn" data-close>Cancel</button><button class="btn primary" id="save">Update</button>`,
-      onMount: (el, close) => $('#save', el).addEventListener('click', async (e) => {
-        const f = $('#pf', el); const d = formData(f); fieldErr(f, 'current', ''); fieldErr(f, 'password', '');
-        try { await withBusy(e.currentTarget, () => post('/me/password', d)); toast('Password updated', 'success'); close(); } catch (err) { fieldErr(f, /current/i.test(err.message) ? 'current' : 'password', err.message); }
-      }) });
-  });
   $('#out', root).addEventListener('click', async () => {
     if (tracker.visit && !(await confirmDialog({ title: 'Sign out?', text: 'You have a visit in progress. Location tracking will stop while you’re signed out.', confirm: 'Sign out', danger: true }))) return;
     stopTracking(); setToken(null); session.user = null; location.hash = '#/login';

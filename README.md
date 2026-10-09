@@ -13,12 +13,12 @@ Admin invites → Employee registers → Face registration → Start visit → G
 npm install
 npm start            # http://localhost:3000
 npm test             # 20 end-to-end checks of the visit rules (no camera needed)
-npm run seed         # reset demo data
+npm run seed         # wipe ALL data, leaving only the admin account
+npm run seed:demo    # dev only: sample employees/visits (cannot be signed into without stubbing Google)
 ```
 
-**Admin:** `admin@argus.test` / `Admin@123`
-**Employees:** `arun@`, `priya@`, `rahul@`, `divya@`, `karthik@argus.test` — password `Demo@123`.
-Seeded employees have no face template, so each registers their face on first login.
+**Sign-in is Google only** (no passwords). The admin is `argushexadoc2021@gmail.com` (override with `ADMIN_EMAIL`); sign in with that Google account. Add employees from the admin Employees page: each gets an invitation email, opens the link, continues with the *same* Google account the invite was sent to, then registers their face. After that they sign in with Google.
+Set `GOOGLE_CLIENT_ID` and the SMTP variables first — see `.env.example`.
 
 ### Trying the field flow from your desk
 On the employee Home screen tick **Demo mode — simulate GPS**. The app starts ~3 km from the site and walks to it, so arrival, face verification and completion can be tried without travelling. Simulated visits are flagged in the admin Visit Details. Face verification always uses the real camera.
@@ -35,7 +35,8 @@ Browsers only allow camera + GPS on **HTTPS or localhost**. Expose the app over 
 | `SMTP_HOST` `SMTP_PORT` `SMTP_SECURE` `SMTP_USER` `SMTP_PASS` `MAIL_FROM` | send real invitation emails (Gmail: `smtp.gmail.com`, port 587, an **App Password**). Without SMTP the invite dialog shows a copyable link and logs it to the console. |
 | `APP_SECRET` | signing/encryption secret (auto-generated into `data/secret.key` if unset) |
 | `ALLOW_SIMULATION=false` | **set in production** — rejects simulated GPS |
-| `DEMO_HINTS=false` | hide demo accounts on the login screen |
+| `GOOGLE_CLIENT_ID` | Google OAuth Web client ID (required for any sign-in) |
+| `ADMIN_EMAIL` | admin's Google account, used when the database is first created |
 | `TILE_URL` `TILE_ATTRIBUTION` | map tile source (default Esri World Street Map; any `{z}/{x}/{y}` XYZ URL works). OpenStreetMap's public tiles block many browsers, so use a provider that fits your licence in production. |
 | `DATA_DIR` | where `db.json` lives |
 
@@ -51,7 +52,7 @@ The UI is never trusted; every rule lives in [server/index.js](server/index.js) 
 | **Official visit end** | Only `verify-end`: status must be `active` and a face must match again. |
 | **Durations** | `Travel = arrival − travel start`. `Visit = end − verified start`. The gap between arrival and verification counts as neither. |
 | **Blocked** | A second open visit, ending an unstarted visit, completing twice, cancelling a verified visit, verifying before arrival or outside the geofence. 5 failed face attempts lock the visit for 2 minutes. |
-| **Auth** | scrypt password hashing, signed expiring tokens, login throttling, single-use hashed invite tokens (72 h), role-checked routes. |
+| **Auth** | Google-only sign-in (ID token verified server-side, email must match the invite), signed expiring tokens, login throttling, single-use hashed invite tokens (72 h), role-checked routes. |
 | **Face data** | Only a 128-number descriptor is stored (AES-256-GCM encrypted at rest) — never a photo. Matching happens server-side. Re-enrolment needs an admin "Reset face". |
 
 ## Screens

@@ -1,4 +1,4 @@
-// Demo data. `npm run seed` resets; the server seeds automatically when the DB is empty.
+// First start creates only the admin account. `npm run seed:demo` loads sample employees/visits (dev only).
 const store = require('./db');
 const sec = require('./security');
 
@@ -21,19 +21,21 @@ function route(from, to, t0, t1, n = 14) {
   return pts;
 }
 
-async function ensureSeed(reset = false) {
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'argushexadoc2021@gmail.com').toLowerCase();
+
+async function ensureSeed(reset = false, demo = false) {
   const db = store.db;
   if (!reset && db.users.length) return;
   if (reset) { for (const k of ['users', 'sites', 'visits', 'notifications']) db[k].length = 0; }
   const now = Date.now();
-  const pass = await sec.hashPassword('Demo@123');
 
-  db.users.push({ id: store.id(), role: 'admin', name: 'Admin', email: 'admin@argus.test', passHash: await sec.hashPassword('Admin@123'), createdAt: now });
+  db.users.push({ id: store.id(), role: 'admin', name: 'Admin', email: ADMIN_EMAIL, registeredAt: now, createdAt: now });
+  if (!demo) { store.save(); store.flush(); return; }
   const sites = SITES.map(([name, address, lat, lng]) => ({ id: store.id(), name, address, lat, lng, radius: 150 }));
   db.sites.push(...sites);
 
   const mk = (name, email, empId, phone, designation, extra = {}) => {
-    const u = { id: store.id(), role: 'employee', name, email, empId, phone, designation, passHash: pass, registeredAt: now - 20 * DAY,
+    const u = { id: store.id(), role: 'employee', name, email, empId, phone, designation, registeredAt: now - 20 * DAY,
       faceRegisteredAt: now - 20 * DAY, createdAt: now - 21 * DAY, invitedAt: now - 21 * DAY, ...extra };
     db.users.push(u); return u;
   };
@@ -42,7 +44,7 @@ async function ensureSeed(reset = false) {
   const rahul = mk('Rahul Mehta', 'rahul@argus.test', 'EMP-103', '+91 98400 11103', 'Territory Manager');
   const divya = mk('Divya Raman', 'divya@argus.test', 'EMP-104', '+91 98400 11104', 'Sales Executive');
   mk('Karthik S', 'karthik@argus.test', 'EMP-105', '+91 98400 11105', 'Sales Associate', { faceRegisteredAt: null });
-  mk('Meena Iyer', 'meena@argus.test', 'EMP-106', '+91 98400 11106', 'Sales Executive', { passHash: null, registeredAt: null, faceRegisteredAt: null,
+  mk('Meena Iyer', 'meena@argus.test', 'EMP-106', '+91 98400 11106', 'Sales Executive', { registeredAt: null, faceRegisteredAt: null,
     inviteHash: sec.sha('demo-expired'), inviteExpires: now + 48 * HOUR, invitedAt: now - 5 * HOUR });
 
   const visit = (u, site, status, ts) => {
@@ -90,8 +92,8 @@ async function ensureSeed(reset = false) {
   n('visit_started', 'Visit started', 'Arun Kumar verified at ABC Industries', 69 * MIN);
   n('travel_started', 'Started travelling', 'Priya Nair is heading to XYZ Ltd', 22 * MIN);
   store.flush();
-  console.log('Seeded demo data. Employees: arun/priya/rahul/divya/karthik @argus.test (password Demo@123). They register their face on first login.');
+  console.log('Seeded demo data (dev only). Sign in needs real Google accounts, so use it with the test suite or stub auth.');
 }
 
-module.exports = { ensureSeed };
-if (require.main === module) ensureSeed(process.argv.includes('--reset')).then(() => process.exit(0));
+module.exports = { ensureSeed, ADMIN_EMAIL };
+if (require.main === module) ensureSeed(process.argv.includes('--reset'), process.argv.includes('--demo')).then(() => process.exit(0));

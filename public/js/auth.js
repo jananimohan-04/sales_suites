@@ -10,54 +10,35 @@ const QUESTIONS = ['Where is my sales employee?', 'Did they actually reach the c
 
 export async function loginPage(root) {
   document.body.classList.remove('is-emp');
-  const demo = session.config.demo;
   root.innerHTML = `<div class="auth">
     <div class="auth-art">${brandMark}
       <div><h1>Know exactly where your field team is — and that they were really there.</h1>
         <div class="qlist">${QUESTIONS.map((q) => `<div>${icon('check')}${q}</div>`).join('')}</div></div>
       <p style="opacity:.75">Live GPS • Geofenced arrival • Face-verified attendance</p></div>
-    <div class="auth-form"><form class="auth-card col" style="gap:18px" id="f" novalidate>
-      <div><h1>Welcome back</h1><p class="sub" style="margin-top:6px">Sign in to ${esc(session.config.orgName)}</p></div>
-      <div class="field"><label>Email</label><input class="input" name="email" type="email" autocomplete="username" placeholder="you@company.com"></div>
-      <div class="field"><label>Password</label><input class="input" name="password" type="password" autocomplete="current-password" placeholder="••••••••"></div>
+    <div class="auth-form"><div class="auth-card col" style="gap:18px">
+      <div><h1>Welcome back</h1><p class="sub" style="margin-top:6px">Sign in to ${esc(session.config.orgName)} with your Google account</p></div>
+      ${googleSlot()}
       <div id="err"></div>
-      <button class="btn primary lg block" type="submit">Sign in</button>
-      ${session.config.googleClientId ? '<div class="or"><span>or</span></div><div id="gbtn" style="display:flex;justify-content:center;min-height:44px"></div>' : ''}
-      ${demo ? `<div class="demo"><b>Demo accounts</b><div>
-        <button type="button" data-u="admin@argus.test" data-p="Admin@123">Admin</button>
-        <button type="button" data-u="arun@argus.test" data-p="Demo@123">Arun</button>
-        <button type="button" data-u="priya@argus.test" data-p="Demo@123">Priya</button>
-        <button type="button" data-u="karthik@argus.test" data-p="Demo@123">Karthik (no face yet)</button></div>
-        <p class="muted" style="margin-top:8px">Employees: password <code>Demo@123</code>. New employees join through an emailed invitation.</p></div>` : ''}
-    </form></div></div>`;
-  const f = $('#f', root);
-  root.querySelectorAll('[data-u]').forEach((b) => b.addEventListener('click', () => { f.email.value = b.dataset.u; f.password.value = b.dataset.p; }));
-  if (session.config.googleClientId) mountGoogle($('#gbtn', root), $('#err', root));
-  f.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const d = formData(f); $('#err', root).innerHTML = '';
+      <p class="muted" style="font-size:12.5px">Use the Google account your invitation was sent to. New employee? Open the invitation email first.</p>
+    </div></div></div>`;
+  mountGoogle($('#gbtn', root), async (credential) => {
+    const errBox = $('#err', root); errBox.innerHTML = '';
     try {
-      await withBusy($('button[type=submit]', f), async () => {
-        const r = await post('/auth/login', d);
-        setToken(r.token); session.user = r.user; location.hash = home(r.user);
-      });
-    } catch (err) { $('#err', root).innerHTML = `<div class="alert err">${icon('alert')}<span>${esc(err.message)}</span></div>`; }
+      const r = await post('/auth/google', { credential });
+      setToken(r.token); session.user = r.user; location.hash = home(r.user);
+    } catch (err) { errBox.innerHTML = `<div class="alert err">${icon('alert')}<span>${esc(err.message)}</span></div>`; }
   });
 }
 
-function mountGoogle(host, errBox) {
+const googleSlot = () => session.config.googleClientId
+  ? '<div id="gbtn" style="display:flex;justify-content:center;min-height:44px"></div>'
+  : `<div class="alert warn">${icon('alert')}<span>Google sign-in isn’t configured yet. Set <b>GOOGLE_CLIENT_ID</b> on the server.</span></div>`;
+
+function mountGoogle(host, onCredential) {
+  if (!host) return;
   const init = () => {
-    window.google.accounts.id.initialize({
-      client_id: session.config.googleClientId,
-      callback: async ({ credential }) => {
-        errBox.innerHTML = '';
-        try {
-          const r = await post('/auth/google', { credential });
-          setToken(r.token); session.user = r.user; location.hash = home(r.user);
-        } catch (err) { errBox.innerHTML = `<div class="alert err">${icon('alert')}<span>${esc(err.message)}</span></div>`; }
-      },
-    });
-    window.google.accounts.id.renderButton(host, { theme: 'outline', size: 'large', text: 'signin_with', shape: 'pill', width: Math.min(host.clientWidth || 340, 400) });
+    window.google.accounts.id.initialize({ client_id: session.config.googleClientId, callback: ({ credential }) => onCredential(credential) });
+    window.google.accounts.id.renderButton(host, { theme: 'outline', size: 'large', text: 'continue_with', shape: 'pill', width: Math.min(host.clientWidth || 340, 400) });
   };
   if (window.google && window.google.accounts) return init();
   const sc = document.createElement('script');
@@ -82,29 +63,21 @@ export async function registerPage(root, [token]) {
       <div class="field"><label>Email</label><input class="input" name="email" value="${esc(inv.email)}" readonly></div>
       <div class="field"><label>Phone number</label><input class="input" name="phone" value="${esc(inv.phone)}" inputmode="tel" autocomplete="tel"></div>
       <div class="field"><label>Employee ID</label><input class="input" name="empId" value="${esc(inv.empId)}" readonly></div>
-      <div class="field"><label>Password</label><input class="input" name="password" type="password" autocomplete="new-password" placeholder="At least 8 characters, letters + numbers">
-        <div class="pwmeter"><i id="pw"></i></div></div>
+      <div class="alert info">${icon('mail')}<span>Continue with the Google account <b>${esc(inv.email)}</b>. You’ll use it to sign in from now on — no password needed.</span></div>
       <div id="err"></div>
-      <button class="btn primary lg block" type="submit">Continue to face registration ${icon('chev')}</button>
+      ${googleSlot()}
     </form></div>`;
   const f = $('#f', root);
-  f.password.addEventListener('input', () => {
-    const p = f.password.value; const s = (p.length >= 8) + (/[A-Z]/.test(p)) + (/\d/.test(p)) + (/[^A-Za-z0-9]/.test(p));
-    const m = $('#pw', root); m.style.width = `${(s / 4) * 100}%`; m.style.background = ['#dc2e45', '#dc2e45', '#ea7b0c', '#12a150', '#12a150'][s];
-  });
-  f.addEventListener('submit', async (e) => {
-    e.preventDefault(); const d = formData(f); let bad = false;
-    ['name', 'phone', 'password'].forEach((k) => fieldErr(f, k, ''));
+  mountGoogle($('#gbtn', root), async (credential) => {
+    const d = formData(f); let bad = false; const errBox = $('#err', root); errBox.innerHTML = '';
+    ['name', 'phone'].forEach((k) => fieldErr(f, k, ''));
     if (d.name.trim().length < 2) { fieldErr(f, 'name', 'Enter your full name'); bad = true; }
     if (!/^\+?[0-9 ()-]{7,18}$/.test(d.phone.trim())) { fieldErr(f, 'phone', 'Enter a valid phone number'); bad = true; }
-    if (d.password.length < 8 || !/[A-Za-z]/.test(d.password) || !/\d/.test(d.password)) { fieldErr(f, 'password', 'Min 8 characters with a letter and a number'); bad = true; }
-    if (bad) return;
+    if (bad) { toast('Fill in your name and phone, then continue with Google', 'error'); return; }
     try {
-      await withBusy($('button[type=submit]', f), async () => {
-        const r = await post(`/invite/${token}/register`, d);
-        setToken(r.token); session.user = r.user; toast('Account created', 'success'); location.hash = '#/face-setup';
-      });
-    } catch (err) { $('#err', root).innerHTML = `<div class="alert err">${icon('alert')}<span>${esc(err.message)}</span></div>`; }
+      const r = await post(`/invite/${token}/register`, { name: d.name, phone: d.phone, credential });
+      setToken(r.token); session.user = r.user; toast('Account created', 'success'); location.hash = '#/face-setup';
+    } catch (err) { errBox.innerHTML = `<div class="alert err">${icon('alert')}<span>${esc(err.message)}</span></div>`; }
   });
 }
 

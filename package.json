@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server/index.js",
     "seed": "node server/seed.js --reset",
+    "seed:demo": "node server/seed.js --reset --demo",
     "test": "node server/test.js"
   },
   "engines": { "node": ">=18" },

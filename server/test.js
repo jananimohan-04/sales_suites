@@ -1,11 +1,15 @@
 // End-to-end API test of the visit state machine & business rules (temp data dir, no camera needed).
+process.env.SMTP_HOST = ''; process.env.SMTP_USER = ''; process.env.GOOGLE_CLIENT_ID = 'test'; // never send real mail from tests
 process.env.DATA_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'argus-'));
 const assert = require('assert');
 const app = require('./index');
 const { ensureSeed } = require('./seed');
+const google = require('./google');
+// Stub Google verification: credential 'g:<email>' means a verified Google account with that email.
+google.verify = async (c) => { if (!String(c).startsWith('g:')) { const e = new Error('Google sign-in could not be verified'); e.status = 401; throw e; } return { email: c.slice(2), name: '' }; };
 
 (async () => {
-  await ensureSeed();
+  await ensureSeed(true, true);
   const srv = app.listen(0); const base = `http://127.0.0.1:${srv.address().port}`;
   const call = async (m, p, body, tok) => {
     const r = await fetch(base + p, { method: m, headers: { 'content-type': 'application/json', ...(tok ? { authorization: 'Bearer ' + tok } : {}) }, body: body ? JSON.stringify(body) : undefined });
@@ -16,8 +20,10 @@ const { ensureSeed } = require('./seed');
   const jitter = (d, e = 0.01) => d.map((x) => x + (Math.random() - 0.5) * e);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  const admin = (await call('POST', '/api/auth/login', { email: 'admin@argus.test', password: 'Admin@123' })).b.token;
-  assert.equal((await call('POST', '/api/auth/login', { email: 'admin@argus.test', password: 'nope' })).s, 401); ok('bad login rejected');
+  const admin = (await call('POST', '/api/auth/google', { credential: 'g:argushexadoc2021@gmail.com' })).b.token; assert(admin);
+  assert.equal((await call('POST', '/api/auth/google', { credential: 'junk' })).s, 401);
+  assert.equal((await call('POST', '/api/auth/google', { credential: 'g:stranger@gmail.com' })).s, 403); ok('google sign-in: admin ok, bad token + unknown account rejected');
+  assert.equal((await call('POST', '/api/auth/login', { email: 'a@b.co', password: 'x' })).s, 404); ok('password login removed')
 
   assert.equal((await call('POST', '/api/admin/employees', { name: 'T', email: 'x', empId: '1', phone: '1', designation: '' }, admin)).s, 400); ok('invite validation');
   const person = { name: 'Test User', email: 'test@x.com', empId: 'T-1', phone: '+91 9999999999', designation: 'Exec' };
@@ -25,9 +31,9 @@ const { ensureSeed } = require('./seed');
   assert.equal(inv.s, 201); assert(inv.b.devLink);
   assert.equal((await call('POST', '/api/admin/employees', { ...person, empId: 'T-2' }, admin)).s, 409); ok('duplicate email blocked');
   const token = inv.b.devLink.split('/register/')[1];
-  const reg0 = { name: 'Test User', email: 'test@x.com', empId: 'T-1', phone: '+91 9999999999', password: 'Passw0rdX' };
-  assert.equal((await call('POST', `/api/invite/${token}/register`, { ...reg0, password: 'short' })).s, 400);
-  assert.equal((await call('POST', `/api/invite/${token}/register`, { ...reg0, email: 'other@x.com' })).s, 400);
+  const reg0 = { name: 'Test User', email: 'test@x.com', empId: 'T-1', phone: '+91 9999999999', credential: 'g:test@x.com' };
+  assert.equal((await call('POST', `/api/invite/${token}/register`, { ...reg0, phone: 'x' })).s, 400);
+  assert.equal((await call('POST', `/api/invite/${token}/register`, { ...reg0, credential: 'g:other@x.com' })).s, 403); ok('register rejects a different Google account');
   const reg = await call('POST', `/api/invite/${token}/register`, reg0);
   assert.equal(reg.s, 200); const t = reg.b.token;
   assert.equal((await call('GET', `/api/invite/${token}`)).s, 404); ok('registration + single-use invite');

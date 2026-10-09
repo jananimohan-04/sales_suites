@@ -8,7 +8,7 @@ const smtp = process.env.SMTP_HOST ? nodemailer.createTransport({
 }) : null;
 
 const configured = !!smtp;
-const from = process.env.MAIL_FROM || process.env.SMTP_USER || 'Argus Field <no-reply@argus.local>';
+const from = process.env.SMTP_USER ? `Argus Field <${process.env.SMTP_USER}>` : 'Argus Field <no-reply@argus.local>';
 
 function template({ org, name, empId, designation, link, hours }) {
   return `<!doctype html><html><body style="margin:0;background:#f4f5fb;font-family:Segoe UI,Arial,sans-serif;color:#1b1d2e">

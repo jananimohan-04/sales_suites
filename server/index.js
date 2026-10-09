@@ -4,6 +4,7 @@ const path = require('path');
 const store = require('./db');
 const sec = require('./security');
 const mail = require('./mail');
+const google = require('./google');
 const { distance, validCoord, euclid } = require('./geo');
 
 const app = express();
@@ -38,7 +39,7 @@ function notify(type, title, body, userId = null, visitId = null) {
 
 function userStatus(u) {
   if (u.role !== 'employee') return 'admin';
-  if (!u.passHash) return 'invited';
+  if (!u.registeredAt) return 'invited';
   if (!u.faceRegisteredAt) return 'registered';
   return D().visits.some((v) => v.userId === u.id) ? 'active' : 'face_registered';
 }
@@ -75,72 +76,36 @@ function auth(role) {
     const tok = (req.headers.authorization || '').replace(/^Bearer /, '');
     const p = sec.readToken(tok);
     const u = p && D().users.find((x) => x.id === p.uid);
-    if (!u || u.disabled || !u.passHash) return next(new HttpError(401, 'Please sign in again'));
+    if (!u || u.disabled || !u.registeredAt) return next(new HttpError(401, 'Please sign in again'));
     if (role && u.role !== role) return next(new HttpError(403, 'Not allowed'));
     req.user = u; next();
   };
 }
 
-// naive login throttle
-const attempts = new Map();
-function throttle(key) {
-  const a = attempts.get(key) || { n: 0, until: 0 };
-  if (a.until > now()) throw new HttpError(429, `Too many attempts. Try again in ${Math.ceil((a.until - now()) / 1000)}s`);
-  return a;
-}
-
-function checkPassword(pw) {
-  if (typeof pw !== 'string' || pw.length < 8) throw bad('Password must be at least 8 characters');
-  if (!/[A-Za-z]/.test(pw) || !/\d/.test(pw)) throw bad('Password needs at least one letter and one number');
-}
-
 // ---------- public ----------
 app.get('/api/config', (req, res) => res.json({
   orgName: D().settings.orgName, allowSimulation: ALLOW_SIM, emailConfigured: mail.configured, googleClientId: process.env.GOOGLE_CLIENT_ID || null,
-  demo: process.env.DEMO_HINTS !== 'false',
+  
   tileUrl: process.env.TILE_URL || 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
   tileAttribution: process.env.TILE_ATTRIBUTION || 'Tiles &copy; Esri',
 }));
 
-app.post('/api/auth/login', wrap(async (req, res) => {
-  const email = str(req.body.email).toLowerCase(), password = typeof req.body.password === 'string' ? req.body.password : '';
-  if (!EMAIL_RE.test(email) || !password) throw bad('Enter your email and password');
-  const key = email + '|' + req.ip; const a = throttle(key);
-  const u = D().users.find((x) => x.email === email);
-  const ok = u && !u.disabled && (await sec.verifyPassword(password, u.passHash));
-  if (!ok) {
-    a.n++; if (a.n >= 5) { a.until = now() + 60000; a.n = 0; }
-    attempts.set(key, a);
-    throw new HttpError(401, 'Incorrect email or password');
-  }
-  attempts.delete(key);
-  res.json({ token: sec.signToken({ uid: u.id }), user: pubUser(u) });
-}));
-
-// Google sign-in: only for people already invited AND registered; the Google email must be verified and match.
+// Google is the only way in. Sign-in works only for accounts that already registered through an invitation
+// (the admin account is created at first start).
+async function googleIdentity(credential) {
+  try { return await google.verify(credential); } catch (e) { throw new HttpError(e.status || 401, e.message); }
+}
 app.post('/api/auth/google', wrap(async (req, res) => {
-  const cid = process.env.GOOGLE_CLIENT_ID;
-  if (!cid) throw new HttpError(503, 'Google sign-in is not configured on this server');
-  const cred = typeof req.body.credential === 'string' ? req.body.credential : '';
-  if (!cred || cred.length > 4096) throw bad('Missing Google credential');
-  let info;
-  try {
-    const r = await fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(cred));
-    info = await r.json();
-    if (!r.ok) info = null;
-  } catch { throw new HttpError(502, 'Could not reach Google to verify your sign-in'); }
-  if (!info || info.aud !== cid || !['accounts.google.com', 'https://accounts.google.com'].includes(info.iss)
-    || String(info.email_verified) !== 'true' || +info.exp * 1000 < now()) throw new HttpError(401, 'Google sign-in could not be verified');
-  const email = str(info.email).toLowerCase();
-  const u = D().users.find((x) => x.email === email);
-  if (!u || u.disabled || !u.passHash) throw new HttpError(403, `${email} is not a registered account. Use the invitation link emailed to you first.`);
+  const g = await googleIdentity(req.body.credential);
+  const u = D().users.find((x) => x.email === g.email);
+  if (!u || u.disabled || !u.registeredAt) throw new HttpError(403, `${g.email} is not a registered account. Use the invitation link emailed to you first.`);
   res.json({ token: sec.signToken({ uid: u.id }), user: pubUser(u) });
 }));
 
 app.get('/api/invite/:token', (req, res) => {
   const h = sec.sha(req.params.token);
   const u = D().users.find((x) => x.inviteHash === h);
-  if (!u || u.passHash) throw new HttpError(404, 'This invitation link is invalid or has already been used');
+  if (!u || u.registeredAt) throw new HttpError(404, 'This invitation link is invalid or has already been used');
   if (u.inviteExpires < now()) throw new HttpError(410, 'This invitation has expired. Ask your admin to resend it.');
   res.json({ name: u.name, email: u.email, phone: u.phone, empId: u.empId, designation: u.designation, org: D().settings.orgName });
 });
@@ -148,16 +113,14 @@ app.get('/api/invite/:token', (req, res) => {
 app.post('/api/invite/:token/register', wrap(async (req, res) => {
   const h = sec.sha(req.params.token);
   const u = D().users.find((x) => x.inviteHash === h);
-  if (!u || u.passHash) throw new HttpError(404, 'This invitation link is invalid or has already been used');
+  if (!u || u.registeredAt) throw new HttpError(404, 'This invitation link is invalid or has already been used');
   if (u.inviteExpires < now()) throw new HttpError(410, 'This invitation has expired');
   const name = str(req.body.name), phone = str(req.body.phone, 20);
   if (name.length < 2) throw bad('Enter your full name');
   if (!PHONE_RE.test(phone)) throw bad('Enter a valid phone number');
-  if (str(req.body.email).toLowerCase() !== u.email) throw bad('Email must match the one your invitation was sent to');
-  if (str(req.body.empId).toLowerCase() !== u.empId.toLowerCase()) throw bad('Employee ID does not match your invitation');
-  checkPassword(req.body.password);
-  u.name = name; u.phone = phone; u.passHash = await sec.hashPassword(req.body.password);
-  u.registeredAt = now(); u.inviteHash = null; u.inviteExpires = null;
+  const g = await googleIdentity(req.body.credential);
+  if (g.email !== u.email) throw new HttpError(403, `Sign in with ${u.email} — the Google account your invitation was sent to (you used ${g.email}).`);
+  u.name = name; u.phone = phone; u.registeredAt = now(); u.inviteHash = null; u.inviteExpires = null;
   notify('registration', 'Registration completed', `${u.name} (${u.empId}) created their account`, null);
   store.save();
   res.json({ token: sec.signToken({ uid: u.id }), user: pubUser(u) });
@@ -165,12 +128,6 @@ app.post('/api/invite/:token/register', wrap(async (req, res) => {
 
 // ---------- authenticated (any role) ----------
 app.get('/api/me', auth(), (req, res) => res.json({ user: pubUser(req.user) }));
-
-app.post('/api/me/password', auth(), wrap(async (req, res) => {
-  if (!(await sec.verifyPassword(req.body.current || '', req.user.passHash))) throw bad('Current password is incorrect');
-  checkPassword(req.body.password);
-  req.user.passHash = await sec.hashPassword(req.body.password); store.save(); res.json({ ok: true });
-}));
 
 const validDescriptor = (d) => Array.isArray(d) && d.length === 128 && d.every((n) => typeof n === 'number' && Number.isFinite(n));
 
@@ -365,7 +322,7 @@ app.get('/api/admin/summary', adm, (req, res) => {
   const emps = D().users.filter((u) => u.role === 'employee');
   const today = D().visits.filter((v) => v.travelStart.t >= since && v.status !== 'cancelled');
   const views = today.map((v) => visitView(v));
-  const live = emps.filter((u) => u.passHash && !u.disabled).map((u) => liveState(u, since));
+  const live = emps.filter((u) => u.registeredAt && !u.disabled).map((u) => liveState(u, since));
   const days = [];
   for (let i = 6; i >= 0; i--) {
     const s = new Date(since); s.setDate(s.getDate() - i); const e = new Date(s); e.setDate(e.getDate() + 1);
@@ -415,7 +372,7 @@ app.post('/api/admin/employees', adm, wrap(async (req, res) => {
   if (!designation) throw bad('Enter a designation');
   if (D().users.some((u) => u.email === email)) throw new HttpError(409, 'An employee with this email already exists');
   if (D().users.some((u) => u.empId && u.empId.toLowerCase() === empId.toLowerCase())) throw new HttpError(409, 'This employee ID is already in use');
-  const u = { id: store.id(), role: 'employee', name, email, empId, phone, designation, passHash: null, createdAt: now() };
+  const u = { id: store.id(), role: 'employee', name, email, empId, phone, designation, createdAt: now() };
   D().users.push(u);
   const r = await issueInvite(u);
   res.status(201).json({ employee: pubUser(u), ...r });
@@ -424,7 +381,7 @@ app.post('/api/admin/employees', adm, wrap(async (req, res) => {
 app.post('/api/admin/employees/:id/resend', adm, wrap(async (req, res) => {
   const u = D().users.find((x) => x.id === req.params.id && x.role === 'employee');
   if (!u) throw new HttpError(404, 'Employee not found');
-  if (u.passHash) throw bad('This employee has already registered');
+  if (u.registeredAt) throw bad('This employee has already registered');
   res.json(await issueInvite(u));
 }));
 
@@ -464,7 +421,7 @@ app.get('/api/admin/visits/:id', adm, (req, res) => {
 
 app.get('/api/admin/live', adm, (req, res) => {
   const since = Number(req.query.since) || new Date().setHours(0, 0, 0, 0);
-  const rows = D().users.filter((u) => u.role === 'employee' && u.passHash && !u.disabled).map((u) => {
+  const rows = D().users.filter((u) => u.role === 'employee' && u.registeredAt && !u.disabled).map((u) => {
     const l = liveState(u, since);
     const open = openVisit(u.id);
     return { ...l, visit: open ? visitView(open, true) : l.visit };
@@ -542,6 +499,6 @@ app.use((err, req, res, next) => {
 
 if (require.main === module) {
   require('./seed').ensureSeed();
-  app.listen(PORT, () => console.log(`\n  Argus Field running -> http://localhost:${PORT}\n  Admin: admin@argus.test / Admin@123\n`));
+  app.listen(PORT, () => console.log(`\n  Argus Field running -> http://localhost:${PORT}\n  Admin (Google sign-in): ${require('./seed').ADMIN_EMAIL}\n`));
 }
 module.exports = app;
