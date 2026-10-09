@@ -8,3 +8,4 @@ mobile/android/build
 mobile/android/app/build
 mobile/android/local.properties
 *.apk
+vercel-env.txt

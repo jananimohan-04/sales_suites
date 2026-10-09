@@ -1,5 +1,5 @@
 // End-to-end API test of the visit state machine & business rules (temp data dir, no camera needed).
-process.env.SMTP_HOST = ''; process.env.SMTP_USER = ''; process.env.GOOGLE_CLIENT_ID = 'test'; // never send real mail from tests
+process.env.DB_DRIVER = 'memory'; process.env.SMTP_HOST = ''; process.env.SMTP_USER = ''; process.env.GOOGLE_CLIENT_ID = 'test'; // never send real mail from tests
 process.env.DATA_DIR = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'argus-'));
 const assert = require('assert');
 const app = require('./index');

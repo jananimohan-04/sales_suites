@@ -23,21 +23,31 @@ function route(from, to, t0, t1, n = 14) {
 
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'argushexadoc2021@gmail.com').toLowerCase();
 
-async function ensureSeed(reset = false, demo = false) {
-  const db = store.db;
-  if (!reset && db.users.length) return;
-  if (reset) { for (const k of ['users', 'sites', 'visits', 'notifications']) db[k].length = 0; }
+// Creates the admin account if the database has none (runs once per server instance, inside a data context).
+async function ensureAdmin() {
+  const admins = await store.q('users', { eq: { role: 'admin' }, limit: 1 });
+  if (admins.length) return;
   const now = Date.now();
+  store.add('users', { role: 'admin', name: 'Admin', email: ADMIN_EMAIL, registeredAt: now, createdAt: now });
+}
 
-  db.users.push({ id: store.id(), role: 'admin', name: 'Admin', email: ADMIN_EMAIL, registeredAt: now, createdAt: now });
-  if (!demo) { store.save(); store.flush(); return; }
-  const sites = SITES.map(([name, address, lat, lng]) => ({ id: store.id(), name, address, lat, lng, radius: 150 }));
-  db.sites.push(...sites);
+// `reset` wipes everything (refused on Supabase unless ALLOW_DB_RESET=yes); `demo` adds sample employees and visits.
+async function ensureSeed(reset = false, demo = false) {
+  if (reset) await store.reset();
+  await store.run(async () => {
+    await ensureAdmin();
+    if (demo) await seedDemo();
+  });
+}
+
+async function seedDemo() {
+  const now = Date.now();
+  const sites = SITES.map(([name, address, lat, lng]) => store.add('sites', { name, address, lat, lng, radius: 150 }));
 
   const mk = (name, email, empId, phone, designation, extra = {}) => {
-    const u = { id: store.id(), role: 'employee', name, email, empId, phone, designation, registeredAt: now - 20 * DAY,
+    const u = { role: 'employee', name, email, empId, phone, designation, registeredAt: now - 20 * DAY,
       faceRegisteredAt: now - 20 * DAY, createdAt: now - 21 * DAY, invitedAt: now - 21 * DAY, ...extra };
-    db.users.push(u); return u;
+    return store.add('users', u);
   };
   const arun = mk('Arun Kumar', 'arun@argus.test', 'EMP-101', '+91 98400 11101', 'Senior Sales Executive');
   const priya = mk('Priya Nair', 'priya@argus.test', 'EMP-102', '+91 98400 11102', 'Sales Executive');
@@ -52,7 +62,7 @@ async function ensureSeed(reset = false, demo = false) {
     const s = [site.lat, site.lng];
     const jit = () => (Math.random() - 0.5) * 0.0006;
     const v = {
-      id: store.id(), userId: u.id, siteId: site.id, status, failedAttempts: ts.fails || 0, lockUntil: 0, simulated: false,
+      userId: u.id, siteId: site.id, status, failedAttempts: ts.fails || 0, lockUntil: 0, simulated: false,
       travelStart: { t: tr, lat: HOME[0], lng: HOME[1], acc: 12 },
       arrival: arr ? { t: arr, lat: s[0] + jit(), lng: s[1] + jit(), acc: 10 } : null,
       verifiedStart: vs ? { t: vs, lat: s[0] + jit(), lng: s[1] + jit(), acc: 9, confidence: 88 + Math.round(Math.random() * 8) } : null,
@@ -65,7 +75,8 @@ async function ensureSeed(reset = false, demo = false) {
     if (end) v.route.push({ t: end, lat: v.end.lat, lng: v.end.lng, acc: 9 });
     v.lastLocation = v.route[v.route.length - 1];
     u.lastLocation = { ...v.lastLocation, visitId: v.id };
-    db.visits.push(v); return v;
+    v.routeCount = v.route.length; u.hasVisited = true;
+    return store.add('visits', v);
   };
 
   const team = [arun, priya, rahul, divya];
@@ -86,14 +97,12 @@ async function ensureSeed(reset = false, demo = false) {
   visit(priya, sites[1], 'travelling', { travel: now - 22 * MIN, live: [13.0735, 80.2352] });
   visit(divya, sites[3], 'completed', { travel: now - 5 * HOUR, arrive: now - 4 * HOUR - 30 * MIN, start: now - 4 * HOUR - 27 * MIN, end: now - 3 * HOUR - 40 * MIN });
 
-  const n = (type, title, body, ago) => db.notifications.push({ id: store.id(), type, title, body, userId: null, visitId: null, at: now - ago, read: false });
+  const n = (type, title, body, ago) => store.add('notifications', { type, title, body, userId: null, visitId: null, at: now - ago, read: false });
   n('invite_sent', 'Invitation sent', 'Invitation for Meena Iyer (meena@argus.test)', 5 * HOUR);
   n('visit_completed', 'Visit completed', 'Rahul Mehta completed DEF Corp — 56 min on site', 2 * HOUR);
   n('visit_started', 'Visit started', 'Arun Kumar verified at ABC Industries', 69 * MIN);
   n('travel_started', 'Started travelling', 'Priya Nair is heading to XYZ Ltd', 22 * MIN);
-  store.flush();
-  console.log('Seeded demo data (dev only). Sign in needs real Google accounts, so use it with the test suite or stub auth.');
 }
 
-module.exports = { ensureSeed, ADMIN_EMAIL };
-if (require.main === module) ensureSeed(process.argv.includes('--reset'), process.argv.includes('--demo')).then(() => process.exit(0));
+module.exports = { ensureSeed, ensureAdmin, ADMIN_EMAIL };
+if (require.main === module) ensureSeed(process.argv.includes('--reset'), process.argv.includes('--demo')).then(() => { console.log('Done.'); process.exit(0); }).catch((e) => { console.error(e.message); process.exit(1); });

@@ -13,8 +13,9 @@ Admin invites → Employee registers → Face registration → Start visit → G
 npm install
 npm start            # http://localhost:3000
 npm test             # 20 end-to-end checks of the visit rules (no camera needed)
-npm run seed         # wipe ALL data, leaving only the admin account
-npm run seed:demo    # dev only: sample employees/visits (cannot be signed into without stubbing Google)
+npm run smoke        # live check of the Supabase connection + photo storage (uses throwaway rows)
+npm run seed         # local/offline DB only: wipe everything, keep the admin (refused on Supabase)
+npm run seed:demo    # local/offline DB only: sample employees/visits
 ```
 
 **Sign-in is Google only** (no passwords). The admin is `argushexadoc2021@gmail.com` (override with `ADMIN_EMAIL`); sign in with that Google account. Add employees from the admin Employees page: each gets an invitation email, opens the link, continues with the *same* Google account the invite was sent to, then registers their face. After that they sign in with Google.
@@ -25,6 +26,13 @@ On the employee Home screen tick **Demo mode — simulate GPS**. The app starts 
 
 ### Testing on a phone
 Browsers only allow camera + GPS on **HTTPS or localhost**. Expose the app over HTTPS (e.g. `cloudflared tunnel --url http://localhost:3000` or `ngrok http 3000`) and set `PUBLIC_URL` to that address so invitation links point to it.
+
+## Database & hosting (Supabase + Vercel)
+- **Data** lives in Supabase Postgres (`users`, `sites`, `visits`, `notifications`, `settings`); **proof photos** in a private Supabase Storage bucket (`visit-photos`, created automatically).
+- One-time setup: paste [supabase/schema.sql](supabase/schema.sql) into Supabase > SQL Editor > Run. Row Level Security is on with no policies, so only the server (secret key) can read or write.
+- The server loads only the rows each request needs and saves only what changed, so employees saving at the same time never overwrite each other.
+- **Vercel:** `api/index.js` runs the Express app as a serverless function (`vercel.json` routes `/api/*` to it); `public/` is served statically. Set the environment variables from `.env.example` in the Vercel dashboard.
+- Without `SUPABASE_URL`/`SUPABASE_SECRET_KEY` (or with `DB_DRIVER=memory`) the server falls back to a local JSON file — used by `npm test`.
 
 ## Daily field flow
 1. **Morning:** employee opens the app and adds today's stops (search a company or drop a pin on the map) under *Today's plan*.

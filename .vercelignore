@@ -1,0 +1,6 @@
+mobile
+data
+node_modules
+.env
+*.apk
+vercel-env.txt

@@ -7,10 +7,14 @@
     "start": "node server/index.js",
     "seed": "node server/seed.js --reset",
     "seed:demo": "node server/seed.js --reset --demo",
-    "test": "node server/test.js"
+    "test": "node server/test.js",
+    "smoke": "node server/smoke-supabase.js"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
+    "@supabase/supabase-js": "^2.117.3",
     "express": "^4.19.2",
     "nodemailer": "^6.9.14"
   }
