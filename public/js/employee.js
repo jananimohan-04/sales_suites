@@ -3,6 +3,7 @@ import { $, $$, esc, icon, toast, modal, confirmDialog, withBusy, fmtTime, fmtTi
   startOfDay, greeting, avatar, visitChip, empty, skeletonRows, successCheck, confetti, formData, fieldErr } from './ui.js';
 import { createMap, personMarker, siteMarker, geofence, routeLine, dotMarker, fit, haversine } from './map.js';
 import { mountVerify } from './face.js';
+import { notify, clearNotify, ensurePermission, nativePlugin } from './notify.js';
 import { getRoute, navLink, pickPlace, shrinkImage, photoBlock, mountPhotos, meetingBlock, OUTCOMES } from './extras.js';
 
 /* ======================================================================
@@ -16,7 +17,7 @@ const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return nu
 const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch { /* storage unavailable */ } };
 
 const tracker = {
-  visit: null, site: null, last: null, watchId: null, pushTimer: null, simTimer: null, lastPush: 0, listeners: new Set(), denied: false, error: null,
+  visit: null, site: null, last: null, watchId: null, nativeWatch: null, nativeStopped: false, ann: null, offAnnounced: false, pushTimer: null, simTimer: null, lastPush: 0, listeners: new Set(), denied: false, error: null,
   get simulated() { return !!this.visit && lsGet(simKey) === this.visit.id; },
 };
 
@@ -24,7 +25,7 @@ function emit() { tracker.listeners.forEach((fn) => fn()); }
 
 function onFix(pos, simulated = false) {
   tracker.last = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy, t: Date.now(), simulated };
-  tracker.denied = false; tracker.error = null;
+  tracker.denied = false; tracker.error = null; trackerRecovered();
   emit();
   if (Date.now() - tracker.lastPush > 4500) push();
 }
@@ -35,13 +36,44 @@ async function push() {
   const f = tracker.last;
   try {
     const r = await post(`/emp/visits/${tracker.visit.id}/location`, { lat: f.lat, lng: f.lng, acc: f.acc, simulated: f.simulated });
+    announce(r.visit);
     tracker.onVisit && tracker.onVisit(r.visit);
   } catch (e) {
     if (e.status === 409) { stopTracking(); tracker.onVisit && tracker.onVisit(null); }
   }
 }
 
+// Status-bar / browser notifications for every milestone. `tracker.ann` remembers what was already announced so
+// each change fires once, whichever screen the employee is on.
+const hm = (t) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+function announce(v) {
+  if (!v || !tracker.ann || tracker.ann.id !== v.id) return;
+  const a = tracker.ann, name = v.site.name;
+  if (v.status !== a.status) {
+    a.status = v.status;
+    if (v.status === 'at_site') notify('📍 Reached the site', `You’re at ${name}. Take the company photo, then verify your face to start the meeting.`, { tag: 'visit-event' });
+    else if (v.status === 'active') notify('✅ Meeting started', `${name} · started ${hm(v.verifiedStart ? v.verifiedStart.t : Date.now())}. Location tracking stays on.`, { tag: 'visit-event' });
+    else if (v.status === 'completed') notify('🏁 Meeting ended', `${name} · ${fmtDur(v.visitSec)} on site. Your visit has been recorded.`, { tag: 'visit-event' });
+    else if (v.status === 'cancelled') notify('Visit cancelled', `Your visit to ${name} was cancelled.`, { tag: 'visit-event' });
+  }
+  if (v.leftGeofence && !a.left) { a.left = true; notify('⚠️ You moved away from the site', `You left the ${name} area during an active meeting.`, { tag: 'visit-warn' }); }
+}
+function trackerProblem(msg) {
+  if (tracker.offAnnounced) return;
+  tracker.offAnnounced = true;
+  notify('📵 Location is OFF', msg || 'Tracking paused. Turn location back on to continue your visit.', { tag: 'visit-warn' });
+}
+function trackerRecovered() {
+  if (!tracker.offAnnounced) return;
+  tracker.offAnnounced = false; clearNotify('visit-warn');
+  notify('📡 Location is back on', 'Tracking has resumed.', { tag: 'visit-warn' });
+}
+
 export function stopTracking() {
+  if (tracker.visit) { clearNotify('tracking'); }
+  const nbg = nativePlugin('BackgroundGeolocation');
+  if (nbg && tracker.nativeWatch != null) nbg.removeWatcher({ id: tracker.nativeWatch }).catch(() => {});
+  tracker.nativeStopped = true; tracker.nativeWatch = null; tracker.ann = null; tracker.offAnnounced = false;
   if (tracker.watchId != null) navigator.geolocation.clearWatch(tracker.watchId);
   clearInterval(tracker.pushTimer); clearInterval(tracker.simTimer);
   Object.assign(tracker, { visit: null, site: null, watchId: null, pushTimer: null, simTimer: null, last: null });
@@ -50,7 +82,10 @@ export function stopTracking() {
 function startTracking(visit) {
   if (tracker.visit && tracker.visit.id === visit.id) { tracker.visit = visit; return; }
   stopTracking();
-  tracker.visit = visit; tracker.site = visit.site;
+  tracker.visit = visit; tracker.site = visit.site; tracker.nativeStopped = false;
+  tracker.ann = { id: visit.id, status: visit.status, left: !!visit.leftGeofence };
+  const nbg = nativePlugin('BackgroundGeolocation');
+  if (!nbg) notify('📍 Location tracking is ON', `Tracking your visit to ${visit.site.name}`, { tag: 'tracking', ongoing: true });
   const sim = lsGet(simKey) === visit.id;
   if (sim) {
     const from = visit.lastLocation || visit.travelStart;
@@ -65,9 +100,17 @@ function startTracking(visit) {
       onFix({ coords: { latitude: cur.lat, longitude: cur.lng, accuracy: 8 } }, true);
     };
     move(); tracker.simTimer = setInterval(move, 1000);
+  } else if (nbg) {
+    // Android app: a foreground service keeps GPS running with the screen off, and shows the pinned "location on" notification.
+    nbg.addWatcher({ backgroundTitle: 'Argus Field — Location is ON', backgroundMessage: `Tracking your visit to ${visit.site.name}`, requestPermissions: true, stale: false, distanceFilter: 5 }, (loc, err) => {
+      if (err) { tracker.denied = err.code === 'NOT_AUTHORIZED'; tracker.error = tracker.denied ? 'Location permission is off' : 'Waiting for GPS signal…'; if (tracker.denied) trackerProblem('Location permission is off. Allow location for Argus Field to continue.'); emit(); return; }
+      if (loc) onFix({ coords: { latitude: loc.latitude, longitude: loc.longitude, accuracy: loc.accuracy } });
+    }).then((id) => { if (tracker.nativeStopped || !tracker.visit) nbg.removeWatcher({ id }).catch(() => {}); else tracker.nativeWatch = id; });
   } else if (navigator.geolocation) {
     tracker.watchId = navigator.geolocation.watchPosition((p) => onFix(p), (err) => {
-      tracker.denied = err.code === 1; tracker.error = err.code === 1 ? 'Location permission is off' : 'Waiting for GPS signal…'; emit();
+      tracker.denied = err.code === 1; tracker.error = err.code === 1 ? 'Location permission is off' : 'Waiting for GPS signal…';
+      if (err.code === 1) trackerProblem('Location permission is off. Enable it in your browser/site settings to continue.');
+      emit();
     }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
   }
   tracker.pushTimer = setInterval(push, 5000);
@@ -222,6 +265,7 @@ async function homePage(root) {
     const site = data.sites.find((s) => s.id === selectedSite);
     if (!site) { msg.innerHTML = `<div class="alert warn">${icon('alert')}<span>Pick a stop from your plan first.</span></div>`; return; }
     const simulate = session.config.allowSimulation && lsGet('argus.simMode') === '1';
+    ensurePermission(); // lets the browser/app show status-bar notifications
     try {
       await withBusy(btn, async () => {
         let pos;
@@ -232,7 +276,10 @@ async function homePage(root) {
         }
         const r = await post('/emp/visits', { siteId: site.id, lat: pos.lat, lng: pos.lng, acc: pos.acc, simulated: !!pos.simulated });
         if (simulate) lsSet(simKey, r.visit.id); else lsSet(simKey, null);
-        data.open = r.visit; startTracking(r.visit); toast(`Heading to ${site.name}`, 'success', 'Visit started'); render();
+        data.open = r.visit; startTracking(r.visit); toast(`Heading to ${site.name}`, 'success', 'Visit started');
+        notify('🚗 Visit started', `Heading to ${site.name}. Location tracking is ON.`, { tag: 'visit-event' });
+        if (r.visit.status === 'at_site') announce(r.visit);
+        render();
       });
     } catch (e) {
       if (/permission/i.test(e.message)) permissionHelp();
@@ -313,7 +360,7 @@ async function homePage(root) {
 
   async function cancelVisit() {
     if (!(await confirmDialog({ title: 'Cancel this visit?', text: 'Travel will stop and nothing is recorded as attendance.', confirm: 'Cancel visit', danger: true }))) return;
-    try { await post(`/emp/visits/${data.open.id}/cancel`); stopTracking(); lsSet(simKey, null); toast('Visit cancelled'); await load(); } catch (e) { toast(e.message, 'error'); }
+    try { const nm = data.open.site.name; await post(`/emp/visits/${data.open.id}/cancel`); stopTracking(); notify('Visit cancelled', `Your visit to ${nm} was cancelled.`, { tag: 'visit-event' }); lsSet(simKey, null); toast('Visit cancelled'); await load(); } catch (e) { toast(e.message, 'error'); }
   }
 
   /* ---- at site ---- */
@@ -342,7 +389,7 @@ async function homePage(root) {
         const image = await shrinkImage(f);
         const r = await post(`/emp/visits/${v.id}/site-photo`, { image });
         data.open = { ...data.open, ...r.visit, route: data.open.route };
-        toast('Photo saved', 'success'); render();
+        toast('Photo saved', 'success'); notify('📸 Site photo saved', `Now verify your face to start the meeting at ${v.site.name}.`, { tag: 'visit-event' }); render();
       } catch (err) { msg.innerHTML = `<div class="alert err">${icon('alert')}<span>${esc(err.message)}</span></div>`; }
     };
     $('#pcam', root).addEventListener('change', onPick); $('#pfile', root).addEventListener('change', onPick);
@@ -454,6 +501,7 @@ async function verifyPage(root, kind, id) {
       return post(`/emp/visits/${id}/${starting ? 'verify-start' : 'verify-end'}`, { descriptor, lat: fix.lat, lng: fix.lng, acc: fix.acc, simulated: !!fix.simulated, ...(meeting ? { meeting } : {}) });
     },
     onSuccess: (r) => {
+      if (r && r.visit) announce(r.visit);
       if (starting) { toast('Your visit is now recorded', 'success', 'Visit started'); location.hash = '#/e'; }
       else { stopTracking(); lsSet(simKey, null); try { sessionStorage.removeItem('argus.meeting.' + id); } catch { /* ok */ } location.hash = `#/e/done/${id}`; }
     },

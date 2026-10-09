@@ -34,8 +34,28 @@ const googleSlot = () => session.config.googleClientId
   ? '<div id="gbtn" style="display:flex;justify-content:center;min-height:44px"></div>'
   : `<div class="alert warn">${icon('alert')}<span>Google sign-in isn’t configured yet. Set <b>GOOGLE_CLIENT_ID</b> on the server.</span></div>`;
 
+// Google blocks its web sign-in inside Android WebViews, so the APK uses the native Google account picker instead.
+const nativeGoogle = () => (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() && window.Capacitor.Plugins && window.Capacitor.Plugins.SocialLogin) || null;
+
 function mountGoogle(host, onCredential) {
   if (!host) return;
+  const native = nativeGoogle();
+  if (native) {
+    host.innerHTML = `<button type="button" class="btn lg block" id="gnative">${icon('user')} Continue with Google</button>`;
+    host.querySelector('#gnative').addEventListener('click', async (e) => {
+      const btn = e.currentTarget; btn.disabled = true;
+      try {
+        await native.initialize({ google: { webClientId: session.config.googleClientId } });
+        const r = await native.login({ provider: 'google', options: {} });
+        const idToken = r && r.result && r.result.idToken;
+        if (!idToken) throw new Error('Google did not return a sign-in token');
+        await onCredential(idToken);
+      } catch (err) {
+        if (!/cancel/i.test(String(err && err.message))) toast(String((err && err.message) || err), 'error', 'Google sign-in failed');
+      } finally { btn.disabled = false; }
+    });
+    return;
+  }
   const init = () => {
     window.google.accounts.id.initialize({ client_id: session.config.googleClientId, callback: ({ credential }) => onCredential(credential) });
     window.google.accounts.id.renderButton(host, { theme: 'outline', size: 'large', text: 'continue_with', shape: 'pill', width: Math.min(host.clientWidth || 340, 400) });

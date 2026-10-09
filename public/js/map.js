@@ -1,10 +1,28 @@
 // Leaflet helpers with a clean, low-clutter style.
 import { icon } from './ui.js';
 
+// Optional Google basemap (set GOOGLE_MAPS_API_KEY on the server). Markers, geofences and routes stay Leaflet,
+// so only the tiles change. Falls back to the default tiles if the key/plugin fails to load.
+let googleReady = null;
+const loadScript = (src) => new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.async = true; s.onload = res; s.onerror = () => rej(new Error('load failed: ' + src)); document.head.appendChild(s); });
+function loadGoogle(key) {
+  if (!googleReady) googleReady = (async () => {
+    if (!(window.google && window.google.maps)) await loadScript(`https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}`);
+    if (!(L.gridLayer && L.gridLayer.googleMutant)) await loadScript('https://unpkg.com/leaflet.gridlayer.googlemutant@0.14.1/dist/Leaflet.GoogleMutant.js');
+  })();
+  return googleReady;
+}
+
 export function createMap(el, { center = [13.0827, 80.2707], zoom = 12, zoomControl = true } = {}) {
   const map = L.map(el, { zoomControl, attributionControl: true }).setView(center, zoom);
   const tiles = window.__tiles || {};
-  L.tileLayer(tiles.url || 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: tiles.attribution || 'Tiles &copy; Esri' }).addTo(map);
+  const base = L.tileLayer(tiles.url || 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: tiles.attribution || 'Tiles &copy; Esri' }).addTo(map);
+  if (tiles.googleKey) {
+    loadGoogle(tiles.googleKey).then(() => {
+      if (!map._container || !document.body.contains(map._container)) return;
+      L.gridLayer.googleMutant({ type: 'roadmap', maxZoom: 21 }).addTo(map); map.removeLayer(base);
+    }).catch(() => { googleReady = null; });
+  }
   const t = setTimeout(() => { if (map._loaded) map.invalidateSize(); }, 120);
   map.on('unload', () => clearTimeout(t));
   return map;

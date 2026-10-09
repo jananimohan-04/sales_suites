@@ -1,3 +1,10 @@
 node_modules
 data/
 .env
+mobile/node_modules
+mobile/build.log
+mobile/android/.gradle
+mobile/android/build
+mobile/android/app/build
+mobile/android/local.properties
+*.apk

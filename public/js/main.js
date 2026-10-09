@@ -3,6 +3,7 @@ import { $, esc, icon } from './ui.js';
 import { loginPage, registerPage, faceSetupPage, home } from './auth.js';
 import { adminRoute } from './admin.js';
 import { employeeRoute } from './employee.js';
+import { initNotifications, armPermissionOnGesture } from './notify.js';
 
 const root = $('#app');
 let cleanup = null;
@@ -10,8 +11,9 @@ let adminCtx = null;
 
 async function boot() {
   try { session.config = await get('/config'); } catch { session.config = { orgName: 'Argus Field', demo: false }; }
-  window.__tiles = { url: session.config.tileUrl, attribution: session.config.tileAttribution };
+  window.__tiles = { url: session.config.tileUrl, attribution: session.config.tileAttribution, googleKey: session.config.googleMapsKey };
   if (getToken()) { try { session.user = (await get('/me')).user; } catch { setToken(null); } }
+  initNotifications(); armPermissionOnGesture();
   window.addEventListener('hashchange', route);
   route();
 }

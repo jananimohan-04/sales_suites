@@ -3,6 +3,7 @@ import { $, $$, esc, icon, toast, modal, confirmDialog, withBusy, fmtTime, fmtDu
   startOfDay, avatar, liveChip, inviteChip, visitChip, verifyChip, empty, skeletonRows, formData, fieldErr, download, csvCell, LIVE_COLOR, colorFor, initials } from './ui.js';
 import { createMap, personMarker, siteMarker, geofence, routeLine, dotMarker, fit, haversine } from './map.js';
 import { meetingBlock, mountPhotos } from './extras.js';
+import { notify as sysNotify } from './notify.js';
 
 const NAV = [['dashboard', 'grid', 'Dashboard'], ['live', 'map', 'Live Tracking'], ['employees', 'users', 'Employees'], ['visits', 'clock', 'Visits'], ['reports', 'chart', 'Reports'], ['settings', 'cog', 'Settings']];
 const TITLES = { dashboard: 'Dashboard', live: 'Live Tracking', employees: 'Sales Employees', employee: 'Employee Details', visits: 'Visit History', visit: 'Visit Details', reports: 'Reports', settings: 'Settings', invite: 'Sales Employees' };
@@ -48,7 +49,7 @@ async function pollNotifs() {
     const { notifications } = await get('/admin/notifications');
     if (!notif.first) {
       const known = new Set(notif.list.map((n) => n.id));
-      notifications.filter((n) => !known.has(n.id)).reverse().forEach((n) => toast(n.body, n.type === 'face_failed' ? 'error' : 'info', n.title));
+      notifications.filter((n) => !known.has(n.id)).reverse().forEach((n) => { toast(n.body, n.type === 'face_failed' ? 'error' : 'info', n.title); sysNotify(n.title, n.body, { tag: 'adm-' + n.id }); });
     }
     notif.list = notifications; notif.first = false; updateBadge();
     if (!$('#np').classList.contains('hide')) renderNotifs();

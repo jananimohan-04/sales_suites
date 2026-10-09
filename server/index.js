@@ -89,7 +89,7 @@ function auth(role) {
 
 // ---------- public ----------
 app.get('/api/config', (req, res) => res.json({
-  orgName: D().settings.orgName, allowSimulation: ALLOW_SIM, emailConfigured: mail.configured, googleClientId: process.env.GOOGLE_CLIENT_ID || null,
+  orgName: D().settings.orgName, allowSimulation: ALLOW_SIM, emailConfigured: mail.configured, googleClientId: process.env.GOOGLE_CLIENT_ID || null, googleMapsKey: process.env.GOOGLE_MAPS_API_KEY || null,
   
   tileUrl: process.env.TILE_URL || 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
   tileAttribution: process.env.TILE_ATTRIBUTION || 'Tiles &copy; Esri',
