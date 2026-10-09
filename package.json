@@ -1,0 +1,16 @@
+{
+  "name": "argus-site-visit",
+  "version": "1.0.0",
+  "description": "Field-sales visit & attendance tracking with geofenced, face-verified site visits",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "seed": "node server/seed.js --reset",
+    "test": "node server/test.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "express": "^4.19.2",
+    "nodemailer": "^6.9.14"
+  }
+}
