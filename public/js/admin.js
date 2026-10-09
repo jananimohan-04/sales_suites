@@ -2,10 +2,11 @@ import { get, post, put, patch, del, session, setToken } from './api.js';
 import { $, $$, esc, icon, toast, modal, confirmDialog, withBusy, fmtTime, fmtDur, fmtClock, fmtDist, fmtDate, fmtDateShort, fmtWeekday, ago,
   startOfDay, avatar, liveChip, inviteChip, visitChip, verifyChip, empty, skeletonRows, formData, fieldErr, download, csvCell, LIVE_COLOR, colorFor, initials } from './ui.js';
 import { createMap, personMarker, siteMarker, geofence, routeLine, dotMarker, fit, haversine } from './map.js';
+import { meetingBlock, mountPhotos } from './extras.js';
 
 const NAV = [['dashboard', 'grid', 'Dashboard'], ['live', 'map', 'Live Tracking'], ['employees', 'users', 'Employees'], ['visits', 'clock', 'Visits'], ['reports', 'chart', 'Reports'], ['settings', 'cog', 'Settings']];
 const TITLES = { dashboard: 'Dashboard', live: 'Live Tracking', employees: 'Sales Employees', employee: 'Employee Details', visits: 'Visit History', visit: 'Visit Details', reports: 'Reports', settings: 'Settings', invite: 'Sales Employees' };
-const NOTE_ICON = { invite_sent: ['send', 'brand'], registration: ['user', 'blue'], face_registered: ['scan', 'brand'], travel_started: ['nav', 'blue'], reached_site: ['flag', 'orange'], visit_started: ['check', 'green'], visit_completed: ['shield', 'teal'], face_failed: ['alert', 'red'] };
+const NOTE_ICON = { invite_sent: ['send', 'brand'], registration: ['user', 'blue'], site_photo: ['camera', 'teal'], face_registered: ['scan', 'brand'], travel_started: ['nav', 'blue'], reached_site: ['flag', 'orange'], visit_started: ['check', 'green'], visit_completed: ['shield', 'teal'], face_failed: ['alert', 'red'] };
 const cityOf = (a = '') => a.split(',').pop().trim() || '—';
 const EXTRA = { blue: 'var(--blue-soft)', orange: 'var(--orange-soft)', green: 'var(--green-soft)', brand: 'var(--brand-soft)', teal: 'var(--teal-soft)', red: 'var(--red-soft)' };
 const FG = { blue: 'var(--blue)', orange: 'var(--orange)', green: 'var(--green)', brand: 'var(--brand)', teal: 'var(--teal)', red: 'var(--red)' };
@@ -319,6 +320,8 @@ async function visit({ host }, id) {
           ${step(v.verifiedStart ? 'verified' : v.arrival ? 'now' : '', 'shield', 'Visit started — face verified', fmtTime(v.verifiedStart && v.verifiedStart.t), v.verifiedStart ? `Match ${v.verifiedStart.confidence}% · official attendance begins` : 'Awaiting face verification')}
           ${step(v.end ? 'verified' : v.verifiedStart ? 'now' : '', 'check', 'Visit ended — face verified', fmtTime(v.end && v.end.t), v.end ? `Match ${v.end.confidence}% · on site ${fmtDur(v.visitSec)}` : v.verifiedStart ? `In progress · ${fmtDur(v.visitSec)} so far` : '—')}
         </div></div>
+        ${v.sitePhoto ? `<div class="card"><div class="card-h"><h2>Site proof photo</h2><span class="muted" style="font-size:12.5px">${fmtTime(v.sitePhoto.t)}</span></div><div data-photo-wrap><img class="proof hide" data-photo="${v.id}" alt="Company logo or visiting card"></div></div>` : ''}
+        ${meetingBlock(v.meeting)}
         <div class="card"><div class="card-h"><h2>Travel vs on-site</h2></div><div class="split"><i style="flex:${v.travelSec || 0.01};background:#93a4f8"></i><i style="flex:${v.visitSec || 0.01};background:var(--brand)"></i></div>
           <div class="row between" style="margin-top:12px"><div><span class="chip blue">Travel</span><div style="font-size:20px;font-weight:800;margin-top:6px">${fmtDur(v.travelSec)}</div><small class="muted">not counted</small></div>
           <div style="text-align:right"><span class="chip brand">Official visit</span><div style="font-size:20px;font-weight:800;margin-top:6px;color:var(--brand)">${v.verifiedStart ? fmtDur(v.visitSec) : '—'}</div><small class="muted">face-verified period</small></div></div>
@@ -328,6 +331,7 @@ async function visit({ host }, id) {
           <div class="row between"><span class="sub">GPS points recorded</span><b>${v.routePoints}</b></div>
           ${v.leftGeofence ? `<div class="alert warn">${icon('alert')}<span>Employee moved well outside the site during the verified period.</span></div>` : ''}
           ${v.end && !v.end.insideGeofence ? `<div class="alert warn">${icon('alert')}<span>Visit was ended away from the site.</span></div>` : ''}</div></div></div></div>`;
+    mountPhotos(host);
     if (map) map.remove();
     map = createMap($('#vm', host)); layers = [geofence(v.site).addTo(map), siteMarker([v.site.lat, v.site.lng]).addTo(map).bindTooltip(v.site.name)];
     const route = v.route || []; if (route.length > 1) layers.push(routeLine(route).addTo(map));

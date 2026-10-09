@@ -26,6 +26,14 @@ On the employee Home screen tick **Demo mode — simulate GPS**. The app starts 
 ### Testing on a phone
 Browsers only allow camera + GPS on **HTTPS or localhost**. Expose the app over HTTPS (e.g. `cloudflared tunnel --url http://localhost:3000` or `ngrok http 3000`) and set `PUBLIC_URL` to that address so invitation links point to it.
 
+## Daily field flow
+1. **Morning:** employee opens the app and adds today's stops (search a company or drop a pin on the map) under *Today's plan*.
+2. **Start visit → on the way:** the app draws the **road route** (OpenStreetMap/OSRM) with distance and ETA, plus a *Navigate* button that opens Google Maps.
+3. **Arrival** is detected by the server (geofence). The employee must then **photograph the company logo / visiting card** (camera or upload) — stored in `data/uploads/`.
+4. **Face verification** starts the official visit.
+5. **Leaving:** the employee enters **meeting details** (who they met, summary, products discussed, outcome, next step), then verifies their face to end the visit.
+6. Admin sees the proof photo and meeting notes in *Visit Details*.
+
 ## Configuration (environment variables)
 
 | Variable | Purpose |

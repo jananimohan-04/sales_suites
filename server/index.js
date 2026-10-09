@@ -14,7 +14,11 @@ const BASE = () => process.env.PUBLIC_URL || `http://localhost:${PORT}`;
 const D = () => store.db;
 const now = () => Date.now();
 
+app.post('/api/emp/visits/:id/site-photo', express.json({ limit: '4mb' }));
 app.use(express.json({ limit: '200kb' }));
+const fs = require('fs');
+const UPLOADS = path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'uploads');
+fs.mkdirSync(UPLOADS, { recursive: true });
 app.disable('x-powered-by');
 app.use((req, res, next) => {
   res.set({ 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'strict-origin-when-cross-origin', 'Permissions-Policy': 'camera=(self), geolocation=(self)' });
@@ -65,6 +69,7 @@ function visitView(v, withRoute = false) {
     simulated: !!v.simulated, failedAttempts: v.failedAttempts || 0, leftGeofence: !!v.leftGeofence,
     travelSec, visitSec,
     verificationGapSec: v.arrival && v.verifiedStart ? Math.round((v.verifiedStart.t - v.arrival.t) / 1000) : null,
+    sitePhoto: v.sitePhoto ? { t: v.sitePhoto.t } : null, meeting: v.meeting || null,
     routePoints: (v.route || []).length, createdAt: v.travelStart.t, now: t,
   };
   if (withRoute) out.route = v.route || [];
@@ -98,7 +103,14 @@ async function googleIdentity(credential) {
 app.post('/api/auth/google', wrap(async (req, res) => {
   const g = await googleIdentity(req.body.credential);
   const u = D().users.find((x) => x.email === g.email);
-  if (!u || u.disabled || !u.registeredAt) throw new HttpError(403, `${g.email} is not a registered account. Use the invitation link emailed to you first.`);
+  if (!u || u.disabled) throw new HttpError(403, `${g.email} has not been invited. Ask your admin to invite this Google account.`);
+  if (!u.registeredAt) {
+    // Invited but hasn't used the email link yet: signing in with the invited Google account completes registration.
+    if (u.inviteExpires && u.inviteExpires < now()) throw new HttpError(410, 'Your invitation has expired. Ask your admin to resend it.');
+    u.registeredAt = now(); u.inviteHash = null; u.inviteExpires = null;
+    notify('registration', 'Registration completed', `${u.name} (${u.empId}) joined with Google`, null);
+    store.save();
+  }
   res.json({ token: sec.signToken({ uid: u.id }), user: pubUser(u) });
 }));
 
@@ -189,6 +201,8 @@ function checkArrival(v, u, site, pos) {
   return d;
 }
 
+const mySites = (u) => D().sites.filter((s) => !s.archived && (!s.ownerId || s.ownerId === u.id));
+
 app.get('/api/emp/today', emp, (req, res) => {
   const since = Number(req.query.since) || new Date().setHours(0, 0, 0, 0);
   const mine = D().visits.filter((v) => v.userId === req.user.id);
@@ -198,7 +212,7 @@ app.get('/api/emp/today', emp, (req, res) => {
     user: pubUser(req.user),
     open: open ? visitView(open, true) : null,
     today: today.map((v) => visitView(v)),
-    sites: D().sites.filter((s) => !s.archived),
+    sites: mySites(req.user),
     settings: { maxAccuracy: D().settings.maxAccuracy },
   });
 });
@@ -213,7 +227,7 @@ app.post('/api/emp/visits', emp, (req, res) => {
   const u = req.user;
   if (!u.faceTemplate) throw bad('Register your face before starting a visit', { code: 'NO_FACE' });
   if (openVisit(u.id)) throw new HttpError(409, 'You already have a visit in progress. Finish or cancel it first.', { code: 'DUPLICATE' });
-  const site = D().sites.find((s) => s.id === req.body.siteId && !s.archived);
+  const site = mySites(u).find((s) => s.id === req.body.siteId);
   if (!site) throw bad('Choose a customer site');
   const pos = readPos(req.body); needAccuracy(pos);
   const v = {
@@ -240,6 +254,48 @@ app.post('/api/emp/visits/:id/location', emp, (req, res) => {
   res.json({ visit: visitView(v), distance: Math.round(d) });
 });
 
+// ---- Day plan: employees add the places they will visit today ----
+app.post('/api/emp/sites', emp, (req, res) => {
+  const name = str(req.body.name, 80), address = str(req.body.address, 160), lat = Number(req.body.lat), lng = Number(req.body.lng);
+  if (name.length < 2) throw bad('Enter the company or place name');
+  if (!validCoord(lat, lng)) throw bad('Pick the location on the map');
+  const mine = D().sites.filter((x) => x.ownerId === req.user.id && !x.archived);
+  if (mine.length >= 100) throw bad('Too many saved stops. Remove some first.');
+  const site = { id: store.id(), name, address, lat, lng, radius: D().settings.geofenceDefault, ownerId: req.user.id, createdAt: now() };
+  D().sites.push(site); store.save();
+  res.status(201).json({ site });
+});
+app.delete('/api/emp/sites/:id', emp, (req, res) => {
+  const site = D().sites.find((x) => x.id === req.params.id && x.ownerId === req.user.id);
+  if (!site) throw new HttpError(404, 'Stop not found');
+  if (D().visits.some((v) => v.siteId === site.id && OPEN.includes(v.status))) throw new HttpError(409, 'A visit to this stop is in progress');
+  site.archived = true; store.save(); res.json({ ok: true });
+});
+
+// ---- Proof photo (company logo / visiting card) taken on arrival ----
+const IMG_TYPES = { jpeg: [0xff, 0xd8, 0xff], png: [0x89, 0x50, 0x4e, 0x47], webp: [0x52, 0x49, 0x46, 0x46] };
+app.post('/api/emp/visits/:id/site-photo', emp, (req, res) => {
+  const v = ownVisit(req);
+  if (v.status !== 'at_site') throw new HttpError(409, 'Take the photo after you reach the site and before starting the visit', { code: 'NOT_AT_SITE' });
+  const m = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(typeof req.body.image === 'string' ? req.body.image : '');
+  if (!m) throw bad('Upload a JPEG, PNG or WebP photo');
+  const buf = Buffer.from(m[2], 'base64');
+  if (buf.length < 1000 || buf.length > 3 * 1024 * 1024) throw bad('Photo must be under 3 MB');
+  if (!IMG_TYPES[m[1]].every((b, i) => buf[i] === b)) throw bad('That file is not a valid image');
+  const file = `${v.id}.${m[1] === 'jpeg' ? 'jpg' : m[1]}`;
+  fs.writeFileSync(path.join(UPLOADS, file), buf);
+  v.sitePhoto = { t: now(), file, type: m[1] };
+  notify('site_photo', 'Site photo captured', `${req.user.name} uploaded the proof photo at ${D().sites.find((x) => x.id === v.siteId).name}`, req.user.id, v.id);
+  store.save();
+  res.json({ visit: visitView(v) });
+});
+app.get('/api/visits/:id/site-photo', auth(), (req, res) => {
+  const v = D().visits.find((x) => x.id === req.params.id);
+  if (!v || !v.sitePhoto || (req.user.role !== 'admin' && v.userId !== req.user.id)) throw new HttpError(404, 'No photo');
+  res.set('Cache-Control', 'private, max-age=3600'); res.type(v.sitePhoto.type);
+  res.sendFile(path.join(UPLOADS, v.sitePhoto.file));
+});
+
 function faceCheck(req, v) {
   if (v.lockUntil > now()) throw new HttpError(429, `Too many failed attempts. Try again in ${Math.ceil((v.lockUntil - now()) / 1000)}s`, { code: 'LOCKED' });
   if (!validDescriptor(req.body.descriptor)) throw bad('No face captured. Look at the camera and try again.', { code: 'NO_FACE_CAPTURED' });
@@ -262,6 +318,7 @@ app.post('/api/emp/visits/:id/verify-start', emp, (req, res) => {
   const site = D().sites.find((s) => s.id === v.siteId);
   if (v.status === 'active') throw new HttpError(409, 'Visit already started');
   if (v.status !== 'at_site') throw new HttpError(409, 'You must reach the site before verifying', { code: 'NOT_AT_SITE' });
+  if (!v.sitePhoto) throw bad('Take or upload a photo of the company logo or visiting card first', { code: 'NO_PHOTO' });
   const pos = readPos(req.body); needAccuracy(pos);
   const d = distance(pos, site);
   if (d > site.radius) throw bad(`You are ${Math.round(d)} m from the site. Move within ${site.radius} m to verify.`, { code: 'OUTSIDE_GEOFENCE' });
@@ -274,14 +331,25 @@ app.post('/api/emp/visits/:id/verify-start', emp, (req, res) => {
   res.json({ visit: visitView(v, true), confidence: r.confidence });
 });
 
+const OUTCOMES = ['interested', 'follow_up', 'order_placed', 'not_interested'];
+function readMeeting(m) {
+  if (!m || typeof m !== 'object') throw bad('Enter the meeting details before ending the visit', { code: 'NO_MEETING' });
+  const products = (Array.isArray(m.products) ? m.products : []).map((p) => str(p, 80)).filter(Boolean).slice(0, 30);
+  const notes = str(m.notes, 2000);
+  if (notes.length < 5) throw bad('Write a short summary of the meeting', { code: 'NO_MEETING' });
+  if (!products.length) throw bad('Add at least one product you discussed', { code: 'NO_MEETING' });
+  return { contact: str(m.contact, 80), notes, products, outcome: OUTCOMES.includes(m.outcome) ? m.outcome : 'follow_up', nextAction: str(m.nextAction, 300) };
+}
 app.post('/api/emp/visits/:id/verify-end', emp, (req, res) => {
   const v = ownVisit(req), u = req.user;
   const site = D().sites.find((s) => s.id === v.siteId);
   if (v.status === 'completed') throw new HttpError(409, 'Visit already completed');
   if (v.status !== 'active') throw new HttpError(409, 'This visit has not been started with face verification', { code: 'NOT_ACTIVE' });
+  const meeting = readMeeting(req.body.meeting);
   const pos = readPos(req.body); needAccuracy(pos);
   const r = faceCheck(req, v);
   if (!r.ok) failFace(v, u, site, 'end', r);
+  v.meeting = meeting;
   const d = distance(pos, site);
   v.status = 'completed'; v.end = { ...pt(pos), confidence: r.confidence, insideGeofence: d <= site.radius * 1.5 };
   recordPing(v, u, pos);
@@ -457,7 +525,7 @@ app.get('/api/admin/notifications', adm, (req, res) => {
 });
 
 // sites + settings
-app.get('/api/admin/sites', adm, (req, res) => res.json({ sites: D().sites.filter((s) => !s.archived) }));
+app.get('/api/admin/sites', adm, (req, res) => res.json({ sites: D().sites.filter((s) => !s.archived && !s.ownerId) }));
 function siteBody(b) {
   const name = str(b.name, 80), address = str(b.address, 160), lat = Number(b.lat), lng = Number(b.lng), radius = Math.round(Number(b.radius));
   if (name.length < 2) throw bad('Enter the site name');
