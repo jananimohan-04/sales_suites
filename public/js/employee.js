@@ -2,7 +2,8 @@ import { get, post, del, setToken, session, ApiError } from './api.js';
 import { $, $$, esc, icon, toast, modal, confirmDialog, withBusy, fmtTime, fmtTimeS, fmtDur, fmtClock, fmtDist, fmtDate, fmtDateShort,
   startOfDay, greeting, avatar, visitChip, empty, skeletonRows, successCheck, confetti, formData, fieldErr } from './ui.js';
 import { createMap, personMarker, siteMarker, geofence, routeLine, dotMarker, fit, haversine } from './map.js';
-import { mountVerify } from './face.js';
+import { mountVerify, preloadFaceEngine } from './face.js';
+preloadFaceEngine();
 import { notify, clearNotify, ensurePermission, nativePlugin } from './notify.js';
 import { getRoute, navLink, pickPlace, shrinkImage, photoBlock, mountPhotos, meetingBlock, OUTCOMES } from './extras.js';
 
@@ -16,6 +17,7 @@ const simKey = 'argus.sim';
 const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch { /* storage unavailable */ } };
 
+let simJumpId = null; // test helper: start the simulated GPS right at the site
 const tracker = {
   visit: null, site: null, last: null, watchId: null, nativeWatch: null, nativeStopped: false, ann: null, offAnnounced: false, pushTimer: null, simTimer: null, lastPush: 0, listeners: new Set(), denied: false, error: null,
   get simulated() { return !!this.visit && lsGet(simKey) === this.visit.id; },
@@ -89,7 +91,7 @@ function startTracking(visit) {
   const sim = lsGet(simKey) === visit.id;
   if (sim) {
     const from = visit.lastLocation || visit.travelStart;
-    let cur = { lat: from.lat, lng: from.lng };
+    let cur = simJumpId === visit.id ? { lat: visit.site.lat, lng: visit.site.lng } : { lat: from.lat, lng: from.lng };
     const total = Math.max(haversine(cur, visit.site), 1), step = Math.max(total / 16, 25);
     const move = () => {
       const d = haversine(cur, visit.site);
@@ -336,12 +338,15 @@ async function homePage(root) {
         <div class="row between"><span class="sub">Visit status</span>${visitChip('travelling')}</div></div>
       <div class="emp-map"><div id="map" class="map"></div></div>
       <div class="row"><button class="btn grow" id="route">${icon('route')} View Route</button><a class="btn grow" id="navgo" target="_blank" rel="noopener" href="${navLink(v.site)}">${icon('nav')} Navigate</a>${tracker.simulated ? `<span class="chip brand">Simulated GPS</span>` : ''}</div>
+      ${session.config.allowSimulation ? `<button class="btn sm" id="simarrive" style="align-self:center">${icon('flag')} Test: simulate arrival at site</button>` : ''}
       <p class="muted" style="text-align:center;font-size:12.5px">Arrival is detected automatically when you’re within ${v.site.radius} m of the site. Face verification comes next.</p>
       <button class="btn ghost sm" id="cancel" style="align-self:center">Cancel this visit</button>`;
     mountMap();
     $('#route', root).addEventListener('click', () => fit(map, [layers.me, layers.site, layers.fence, road ? layers.road : null], 70));
     refreshRoad();
     $('#cancel', root).addEventListener('click', cancelVisit);
+    const sa = $('#simarrive', root);
+    sa && sa.addEventListener('click', () => { const v2 = data.open; lsSet(simKey, v2.id); simJumpId = v2.id; stopTracking(); startTracking(v2); toast('Simulating arrival — GPS moved to the site', 'success'); });
     tickTravel();
   }
   function tickTravel() {

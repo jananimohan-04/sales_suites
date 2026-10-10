@@ -320,7 +320,12 @@ app.get('/api/visits/:id/site-photo', auth(), wrap(async (req, res) => {
 function faceCheck(req, v) {
   if (v.lockUntil > now()) throw new HttpError(429, `Too many failed attempts. Try again in ${Math.ceil((v.lockUntil - now()) / 1000)}s`, { code: 'LOCKED' });
   if (!validDescriptor(req.body.descriptor)) throw bad('No face captured. Look at the camera and try again.', { code: 'NO_FACE_CAPTURED' });
-  const stored = sec.decryptFace(req.user.faceTemplate);
+  let stored;
+  try { stored = sec.decryptFace(req.user.faceTemplate); } catch (e) {
+    console.error('[face] stored template unreadable (was APP_SECRET changed?):', e.message);
+    throw new HttpError(409, 'Your saved face data can’t be read. Ask your admin to allow face re-registration.', { code: 'FACE_TEMPLATE_INVALID' });
+  }
+  if (!Array.isArray(stored) || stored.length !== req.body.descriptor.length) throw new HttpError(409, 'Your saved face data is invalid. Ask your admin to allow face re-registration.', { code: 'FACE_TEMPLATE_INVALID' });
   const dist = euclid(stored, req.body.descriptor);
   const thr = D().settings.faceThreshold;
   const confidence = Math.max(0, Math.min(99, Math.round(100 * (1 - (dist / thr) * 0.4))));

@@ -2,7 +2,7 @@
 // descriptors are sent to the server — never a photo.
 //   * full 68-point landmarks (better alignment => more accurate descriptors)
 //   * lighting / size / centering / pose checks before any capture
-//   * liveness: the user must blink (or turn their head) during verification
+//   * verification is fast: it captures as soon as the face is aligned (no blink step)
 import { $, icon, successCheck, esc } from './ui.js';
 
 const VER = '1.7.13';
@@ -10,6 +10,8 @@ const LIB = `https://cdn.jsdelivr.net/npm/@vladmandic/face-api@${VER}/dist/face-
 const MODELS = `https://cdn.jsdelivr.net/npm/@vladmandic/face-api@${VER}/model/`;
 
 let loading = null;
+// Called early so the models are already downloaded when the camera screen opens.
+export const preloadFaceEngine = () => { loadFaceEngine().catch(() => {}); };
 export function loadFaceEngine() {
   if (loading) return loading;
   loading = (async () => {
@@ -154,14 +156,14 @@ export function mountEnroll(root, { onDone }) {
       if (!r.found) { streak = 0; cam.progress(0); cam.say(r.dark ? 'Too dark — find better light' : 'No face detected — look at the camera'); return; }
       if (!r.ok) { streak = 0; cam.progress(0); cam.say(r.hint, 'bad'); return; }
       if (!poseOk(r)) { streak = 0; cam.progress(0); cam.say(poseMsg(r)); return; }
-      streak++; cam.progress((streak / 5) * 100); cam.say('Face detected — hold still', 'ok');
-      if (streak < 5) return;
+      streak++; cam.progress((streak / 3) * 100); cam.say('Face detected — hold still', 'ok');
+      if (streak < 3) return;
       busy = true; cam.say('Capturing…', 'ok');
       const got = [];
       for (let i = 0; i < 2; i++) {
         const full = await cam.look(true);
         if (full && full.found && full.ok && full.descriptor && poseOk(full)) got.push(full.descriptor);
-        await sleep(120);
+        await sleep(60);
       }
       if (got.length === 2) {
         samples.push(...got);
@@ -204,8 +206,8 @@ export function mountVerify(root, { submit, onSuccess, successText = 'Face Verif
 
       if (phase === 'align') {
         if (Math.abs(r.ratio - 0.5) > 0.13) { aligned = 0; cam.progress(0); cam.say('Look straight at the camera', 'bad'); return; }
-        aligned++; cam.progress((aligned / 4) * 50); cam.say('Face detected', 'ok');
-        if (aligned >= 4) { phase = 'live'; resetLive(); }
+        aligned++; cam.progress((aligned / 2) * 90); cam.say('Face detected', 'ok');
+        if (aligned >= 2) phase = 'capture';
         return;
       }
 
@@ -227,17 +229,17 @@ export function mountVerify(root, { submit, onSuccess, successText = 'Face Verif
       if (Math.abs(r.ratio - 0.5) > 0.12) { cam.say('Look straight at the camera'); return; }
       busy = true; cam.progress(95); cam.say('Verifying…', 'ok'); cam.scan.classList.remove('hide');
       const shots = [];
-      for (let i = 0; i < 4 && shots.length < 3; i++) {
+      for (let i = 0; i < 3 && shots.length < 2; i++) {
         const d = await cam.look(true);
         if (d && d.found && d.ok && d.descriptor && Math.abs(d.ratio - 0.5) <= 0.13) shots.push(d.descriptor);
-        await sleep(90);
+        await sleep(40);
       }
-      if (shots.length < 2) { busy = false; phase = 'align'; aligned = 0; cam.scan.classList.add('hide'); cam.progress(0); cam.say('Hold steady and look straight'); return; }
+      if (shots.length < 1) { busy = false; phase = 'align'; aligned = 0; cam.scan.classList.add('hide'); cam.progress(0); cam.say('Hold steady and look straight'); return; }
       try {
         const res = await submit(mean(shots));
         cam.scan.classList.add('hide'); cam.destroy();
         cam.showState(`<div>${successCheck()}<p style="margin-top:14px;font-weight:800;font-size:20px">${esc(successText)} ✓</p>${res && res.confidence ? `<p style="opacity:.7;margin-top:4px">Match confidence ${res.confidence}%</p>` : ''}</div>`);
-        setTimeout(() => onSuccess(res), 1300);
+        setTimeout(() => onSuccess(res), 600);
       } catch (e) {
         cam.scan.classList.add('hide'); cam.stopLoop(); cam.progress(0);
         const locked = e.code === 'LOCKED' || e.status === 429;

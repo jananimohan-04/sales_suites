@@ -1,6 +1,7 @@
 import { get, post, setToken, session } from './api.js';
 import { $, icon, esc, toast, withBusy, formData, fieldErr, successCheck, confetti } from './ui.js';
-import { mountEnroll } from './face.js';
+import { mountEnroll, preloadFaceEngine } from './face.js';
+preloadFaceEngine();
 
 const brandMark = `<div class="lockup"><div class="logo">${icon('pin')}</div><span>Argus Field</span></div>`;
 
