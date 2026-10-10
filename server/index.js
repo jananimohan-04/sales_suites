@@ -347,7 +347,8 @@ app.post('/api/emp/visits/:id/verify-start', emp, wrap(async (req, res) => {
   if (!v.sitePhoto) throw bad('Take or upload a photo of the company logo or visiting card first', { code: 'NO_PHOTO' });
   const pos = readPos(req.body); needAccuracy(pos);
   const d = distance(pos, site);
-  if (d > site.radius) throw bad(`You are ${Math.round(d)} m from the site. Move within ${site.radius} m to verify.`, { code: 'OUTSIDE_GEOFENCE' });
+  // Test visits (simulated GPS, only when ALLOW_SIMULATION is on) were already placed at the site, so a stray real fix can't block them.
+  if (d > site.radius && !(ALLOW_SIM && v.simulated)) throw bad(`You are ${Math.round(d)} m from the site. Move within ${site.radius} m to verify.`, { code: 'OUTSIDE_GEOFENCE' });
   const r = faceCheck(req, v);
   if (!r.ok) failFace(v, u, site, 'start', r);
   v.status = 'active'; v.verifiedStart = { ...pt(pos), confidence: r.confidence };
