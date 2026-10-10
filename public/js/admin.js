@@ -143,17 +143,17 @@ async function dashboard({ host }) {
 /* ============================ employees ============================ */
 async function employees({ host }, openInvite = false) {
   let list = [], filter = 'all', q = '';
-  host.innerHTML = `<div class="page-h"><div><h1>Sales employees</h1><p>Invite, track onboarding and see who’s in the field</p></div><button class="btn primary" id="inv">${icon('plus')} Invite Employee</button></div>
+  host.innerHTML = `<div class="page-h"><div><h1>Sales employees</h1><p>Invite employees and admins, track onboarding and see who’s in the field</p></div><button class="btn primary" id="inv">${icon('plus')} Invite Employee</button></div>
     <div class="card"><div class="filters"><div class="seg" id="seg">${[['all', 'All'], ['invited', 'Invited'], ['registered', 'Registered'], ['face_registered', 'Face Registered'], ['active', 'Active']].map(([k, l]) => `<button data-k="${k}" class="${k === 'all' ? 'on' : ''}">${l}</button>`).join('')}</div>
       <input class="input right" id="q" placeholder="Search name, email, ID…" style="min-width:240px"></div><div id="tbl">${skeletonRows(6, 56)}</div></div>`;
   const render = () => {
     const rows = list.filter((e) => (filter === 'all' || e.status === filter) && (!q || `${e.name} ${e.email} ${e.empId}`.toLowerCase().includes(q)));
     $('#tbl', host).innerHTML = rows.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>Employee</th><th>Employee ID</th><th>Designation</th><th>Invitation</th><th>Today</th><th>Visits</th><th>Visit hours</th><th></th></tr></thead><tbody>
-      ${rows.map((e) => `<tr class="click" data-id="${e.id}"><td><div class="person">${avatar(e)}<div><b>${esc(e.name)}</b><span>${esc(e.email)}</span></div></div></td><td class="mono">${esc(e.empId)}</td><td>${esc(e.designation)}</td>
-        <td>${inviteChip(e.status)}${e.disabled ? ' <span class="chip red">Disabled</span>' : ''}</td><td>${e.status === 'invited' ? '<span class="muted">—</span>' : liveChip(e.live)}</td><td>${e.completedVisits}</td><td>${(e.totalVisitSec / 3600).toFixed(1)} h</td>
-        <td style="text-align:right">${e.status === 'invited' ? `<button class="btn sm" data-resend="${e.id}">${icon('send')} Resend</button>` : `<span class="muted">${icon('chev')}</span>`}</td></tr>`).join('')}</tbody></table></div>`
+      ${rows.map((e) => `<tr class="click" data-id="${e.id}"${e.role === 'admin' ? ' data-admin="1"' : ''}><td><div class="person">${avatar(e)}<div><b>${esc(e.name)}${e.role === 'admin' ? ' <span class="chip brand">Admin</span>' : ''}</b><span>${esc(e.email)}</span></div></div></td><td class="mono">${esc(e.empId || '—')}</td><td>${esc(e.designation)}</td>
+        <td>${inviteChip(e.status)}${e.disabled ? ' <span class="chip red">Disabled</span>' : ''}</td><td>${e.status === 'invited' || e.role === 'admin' ? '<span class="muted">—</span>' : liveChip(e.live)}</td><td>${e.role === 'admin' ? '—' : e.completedVisits}</td><td>${e.role === 'admin' ? '—' : (e.totalVisitSec / 3600).toFixed(1) + ' h'}</td>
+        <td style="text-align:right">${e.status === 'invited' ? `<button class="btn sm" data-resend="${e.id}">${icon('send')} Resend</button>` : `<span class="muted">${e.role === 'admin' ? '' : icon('chev')}</span>`}</td></tr>`).join('')}</tbody></table></div>`
       : empty('users', list.length ? 'No matches' : 'No employees yet', list.length ? 'Try another filter or search.' : 'Invite your first sales employee to begin tracking visits.', list.length ? '' : `<button class="btn primary" id="inv2">${icon('plus')} Invite Employee</button>`);
-    $$('tr[data-id]', host).forEach((tr) => tr.addEventListener('click', (e) => { if (!e.target.closest('[data-resend]')) location.hash = `#/a/employee/${tr.dataset.id}`; }));
+    $$('tr[data-id]', host).forEach((tr) => tr.addEventListener('click', (e) => { if (!e.target.closest('[data-resend]') && !tr.dataset.admin) location.hash = `#/a/employee/${tr.dataset.id}`; }));
     $$('[data-resend]', host).forEach((b) => b.addEventListener('click', async () => { try { const r = await withBusy(b, () => post(`/admin/employees/${b.dataset.resend}/resend`)); inviteResult(r, 'Invitation re-sent'); } catch (e) { toast(e.message, 'error'); } }));
     const i2 = $('#inv2', host); i2 && i2.addEventListener('click', () => inviteModal(load));
   };
@@ -180,31 +180,35 @@ function showDevLink(r) {
 }
 
 function inviteModal(onDone) {
-  modal({ title: 'Invite employee', sub: 'They’ll get a secure link to create an account and register their face.',
+  modal({ title: 'Invite user', sub: 'They’ll get a secure link to create an account with Google.',
     body: `<form id="f" class="form-grid" style="padding:6px 0 8px" novalidate>
+      <div class="field full"><label>Role</label><select class="input" name="role"><option value="employee">Sales employee (registers face, logs visits)</option><option value="admin">Admin (full console access)</option></select></div>
       <div class="field"><label>Employee name</label><input class="input" name="name" placeholder="Arun Kumar" autocomplete="off"></div>
-      <div class="field"><label>Employee ID</label><input class="input" name="empId" placeholder="EMP-107" autocomplete="off"></div>
+      <div class="field"><label>Employee ID <span class="muted" id="idopt"></span></label><input class="input" name="empId" placeholder="EMP-107" autocomplete="off"></div>
       <div class="field full"><label>Email address</label><input class="input" name="email" type="email" placeholder="arun@company.com" autocomplete="off"></div>
       <div class="field"><label>Phone number</label><input class="input" name="phone" placeholder="+91 98400 00000" autocomplete="off"></div>
       <div class="field"><label>Designation</label><input class="input" name="designation" placeholder="Sales Executive" autocomplete="off"></div></form><div id="err"></div>`,
     footer: `<button class="btn" data-close>Cancel</button><button class="btn primary" id="send">${icon('send')} Send Invitation</button>`,
     onMount: (el, close) => {
       const f = $('#f', el);
+      const roleSel = f.elements.role, isAdm = () => roleSel.value === 'admin';
+      const syncRole = () => { $('#idopt', el).textContent = isAdm() ? '(optional)' : ''; f.elements.designation.placeholder = isAdm() ? 'Administrator (optional)' : 'Sales Executive'; };
+      roleSel.addEventListener('change', syncRole); syncRole();
       const submit = async (btn) => {
         const d = formData(f); let bad = false; $('#err', el).innerHTML = '';
         ['name', 'empId', 'email', 'phone', 'designation'].forEach((k) => fieldErr(f, k, ''));
         if (d.name.trim().length < 2) { fieldErr(f, 'name', 'Enter the name'); bad = true; }
-        if (!/^[A-Za-z0-9_-]{2,20}$/.test(d.empId.trim())) { fieldErr(f, 'empId', '2–20 letters, numbers, - or _'); bad = true; }
+        if ((!isAdm() || d.empId.trim()) && !/^[A-Za-z0-9_-]{2,20}$/.test(d.empId.trim())) { fieldErr(f, 'empId', '2–20 letters, numbers, - or _'); bad = true; }
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(d.email.trim())) { fieldErr(f, 'email', 'Enter a valid email'); bad = true; }
         if (!/^\+?[0-9 ()-]{7,18}$/.test(d.phone.trim())) { fieldErr(f, 'phone', 'Enter a valid phone number'); bad = true; }
-        if (!d.designation.trim()) { fieldErr(f, 'designation', 'Required'); bad = true; }
+        if (!isAdm() && !d.designation.trim()) { fieldErr(f, 'designation', 'Required'); bad = true; }
         if (bad) return;
         try { const r = await withBusy(btn, () => post('/admin/employees', d)); close(); inviteResult(r, `Invitation sent to ${r.employee.email}`); onDone && onDone(); }
         catch (e) { $('#err', el).innerHTML = `<div class="alert err" style="margin-bottom:8px">${icon('alert')}<span>${esc(e.message)}</span></div>`; }
       };
       $('#send', el).addEventListener('click', (e) => submit(e.currentTarget));
       f.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit($('#send', el)); } });
-      $('input', f).focus();
+      $('input[name=name]', f).focus();
     } });
 }
 

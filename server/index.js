@@ -40,8 +40,8 @@ function notify(type, title, body, userId = null, visitId = null) {
 }
 
 function userStatus(u) {
-  if (u.role !== 'employee') return 'admin';
   if (!u.registeredAt) return 'invited';
+  if (u.role !== 'employee') return 'admin';
   if (!u.faceRegisteredAt) return 'registered';
   return u.hasVisited ? 'active' : 'face_registered';
 }
@@ -127,7 +127,7 @@ app.post('/api/auth/google', wrap(async (req, res) => {
     // Invited but hasn't used the email link yet: signing in with the invited Google account completes registration.
     if (u.inviteExpires && u.inviteExpires < now()) throw new HttpError(410, 'Your invitation has expired. Ask your admin to resend it.');
     u.registeredAt = now(); u.inviteHash = null; u.inviteExpires = null;
-    notify('registration', 'Registration completed', `${u.name} (${u.empId}) joined with Google`, null);
+    notify('registration', 'Registration completed', `${u.name}${u.empId ? ` (${u.empId})` : ""} joined with Google`, null);
   }
   res.json({ token: sec.signToken({ uid: u.id }), user: pubUser(u) });
 }));
@@ -138,7 +138,7 @@ app.get('/api/invite/:token', wrap(async (req, res) => {
   const u = await byInvite(req.params.token);
   if (!u || u.registeredAt) throw new HttpError(404, 'This invitation link is invalid or has already been used');
   if (u.inviteExpires < now()) throw new HttpError(410, 'This invitation has expired. Ask your admin to resend it.');
-  res.json({ name: u.name, email: u.email, phone: u.phone, empId: u.empId, designation: u.designation, org: D().settings.orgName });
+  res.json({ name: u.name, email: u.email, phone: u.phone, empId: u.empId, designation: u.designation, role: u.role, org: D().settings.orgName });
 }));
 
 app.post('/api/invite/:token/register', wrap(async (req, res) => {
@@ -151,7 +151,7 @@ app.post('/api/invite/:token/register', wrap(async (req, res) => {
   const g = await googleIdentity(req.body.credential);
   if (g.email !== u.email) throw new HttpError(403, `Sign in with ${u.email} — the Google account your invitation was sent to (you used ${g.email}).`);
   u.name = name; u.phone = phone; u.registeredAt = now(); u.inviteHash = null; u.inviteExpires = null;
-  notify('registration', 'Registration completed', `${u.name} (${u.empId}) created their account`, null);
+  notify('registration', 'Registration completed', `${u.name}${u.empId ? ` (${u.empId})` : ""} created their account`, null);
   res.json({ token: sec.signToken({ uid: u.id }), user: pubUser(u) });
 }));
 
@@ -442,9 +442,11 @@ app.get('/api/admin/summary', adm, wrap(async (req, res) => {
 app.get('/api/admin/employees', adm, wrap(async (req, res) => {
   const since = sinceOf(req.query);
   const emps = await store.q('users', { eq: { role: 'employee' } });
+  const admins = await store.q('users', { eq: { role: 'admin' } });
   await hydrate(await liveVisits(since));
   await hydrate(await store.q('visits', { eq: { status: 'completed' } }));
-  const list = emps.map((u) => {
+  const list = [...emps, ...admins].map((u) => {
+    if (u.role === 'admin') return { ...pubUser(u), live: null, completedVisits: 0, totalVisitSec: 0 };
     const mine = D().visits.filter((v) => v.userId === u.id && v.status === 'completed');
     return { ...pubUser(u), live: liveState(u, since).state, completedVisits: mine.length, totalVisitSec: mine.reduce((a, v) => a + visitView(v).visitSec, 0) };
   });
@@ -465,25 +467,33 @@ const employeeById = async (id) => {
   if (!u) throw new HttpError(404, 'Employee not found');
   return u;
 };
+const invitableById = async (id) => {
+  const [u] = await store.q('users', { eq: { id: String(id) }, limit: 1 });
+  if (!u) throw new HttpError(404, 'User not found');
+  return u;
+};
 
 app.post('/api/admin/employees', adm, wrap(async (req, res) => {
+  const role = req.body.role === 'admin' ? 'admin' : 'employee', isAdmin = role === 'admin';
   const name = str(req.body.name), email = str(req.body.email).toLowerCase(), empId = str(req.body.empId, 20),
-    phone = str(req.body.phone, 20), designation = str(req.body.designation, 60);
-  if (name.length < 2) throw bad('Enter the employee name');
+    phone = str(req.body.phone, 20), designation = isAdmin ? (str(req.body.designation, 60) || 'Administrator') : str(req.body.designation, 60);
+  if (name.length < 2) throw bad(`Enter the ${isAdmin ? 'admin' : 'employee'} name`);
   if (!EMAIL_RE.test(email)) throw bad('Enter a valid email address');
-  if (!/^[A-Za-z0-9_-]{2,20}$/.test(empId)) throw bad('Employee ID: 2–20 letters, numbers, - or _');
+  if (!isAdmin || empId) if (!/^[A-Za-z0-9_-]{2,20}$/.test(empId)) throw bad('Employee ID: 2–20 letters, numbers, - or _');
   if (!PHONE_RE.test(phone)) throw bad('Enter a valid phone number');
   if (!designation) throw bad('Enter a designation');
-  if ((await store.q('users', { eq: { email }, limit: 1 })).length) throw new HttpError(409, 'An employee with this email already exists');
-  const all = await store.q('users', { eq: { role: 'employee' } });
-  if (all.some((u) => u.empId && u.empId.toLowerCase() === empId.toLowerCase())) throw new HttpError(409, 'This employee ID is already in use');
-  const u = store.add('users', { role: 'employee', name, email, empId, phone, designation, createdAt: now() });
+  if ((await store.q('users', { eq: { email }, limit: 1 })).length) throw new HttpError(409, 'A user with this email already exists');
+  if (empId) {
+    const all = await store.q('users', {});
+    if (all.some((u) => u.empId && u.empId.toLowerCase() === empId.toLowerCase())) throw new HttpError(409, 'This employee ID is already in use');
+  }
+  const u = store.add('users', { role, name, email, empId, phone, designation, createdAt: now() });
   const r = await issueInvite(u);
   res.status(201).json({ employee: pubUser(u), ...r });
 }));
 
 app.post('/api/admin/employees/:id/resend', adm, wrap(async (req, res) => {
-  const u = await employeeById(req.params.id);
+  const u = await invitableById(req.params.id);
   if (u.registeredAt) throw bad('This employee has already registered');
   res.json(await issueInvite(u));
 }));

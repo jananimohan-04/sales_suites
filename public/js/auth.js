@@ -77,12 +77,12 @@ export async function registerPage(root, [token]) {
   }
   root.innerHTML = `<div class="page-simple"><div style="padding:18px 4px 22px">${brandMark}</div>
     <form class="card col" style="gap:16px;padding:24px" id="f" novalidate>
-      <div><span class="chip brand">Step 1 of 2</span><h1 style="margin-top:10px;font-size:24px">Create your account</h1>
-      <p class="sub" style="margin-top:4px">You were invited to <b>${esc(inv.org)}</b> as ${esc(inv.designation)}.</p></div>
+      <div><span class="chip brand">${inv.role === 'admin' ? 'Admin invitation' : 'Step 1 of 2'}</span><h1 style="margin-top:10px;font-size:24px">Create your account</h1>
+      <p class="sub" style="margin-top:4px">You were invited to <b>${esc(inv.org)}</b> as ${inv.role === 'admin' ? 'an admin' : esc(inv.designation)}.</p></div>
       <div class="field"><label>Full name</label><input class="input" name="name" value="${esc(inv.name)}" autocomplete="name"></div>
       <div class="field"><label>Email</label><input class="input" name="email" value="${esc(inv.email)}" readonly></div>
       <div class="field"><label>Phone number</label><input class="input" name="phone" value="${esc(inv.phone)}" inputmode="tel" autocomplete="tel"></div>
-      <div class="field"><label>Employee ID</label><input class="input" name="empId" value="${esc(inv.empId)}" readonly></div>
+      ${inv.empId ? `<div class="field"><label>Employee ID</label><input class="input" name="empId" value="${esc(inv.empId)}" readonly></div>` : ''}
       <div class="alert info">${icon('mail')}<span>Continue with the Google account <b>${esc(inv.email)}</b>. You’ll use it to sign in from now on — no password needed.</span></div>
       <div id="err"></div>
       ${googleSlot()}
@@ -96,7 +96,7 @@ export async function registerPage(root, [token]) {
     if (bad) { toast('Fill in your name and phone, then continue with Google', 'error'); return; }
     try {
       const r = await post(`/invite/${token}/register`, { name: d.name, phone: d.phone, credential });
-      setToken(r.token); session.user = r.user; toast('Account created', 'success'); location.hash = '#/face-setup';
+      setToken(r.token); session.user = r.user; toast('Account created', 'success'); location.hash = r.user.role === 'admin' ? '#/a/dashboard' : '#/face-setup';
     } catch (err) { errBox.innerHTML = `<div class="alert err">${icon('alert')}<span>${esc(err.message)}</span></div>`; }
   });
 }

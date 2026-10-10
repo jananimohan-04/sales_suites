@@ -78,7 +78,7 @@ const LIVE = {
 };
 export const LIVE_COLOR = { on_visit: '#12a150', travelling: '#2563eb', reached: '#ea7b0c', not_started: '#8b8fa8', completed: '#0d9488' };
 export const liveChip = (s) => { const [c, l] = LIVE[s] || LIVE.not_started; return `<span class="chip ${c}">${s === 'completed' ? icon('check') : '<span class="dot"></span>'}${l}</span>`; };
-const INV = { invited: ['orange', 'Invited'], registered: ['blue', 'Registered'], face_registered: ['brand', 'Face Registered'], active: ['green', 'Active'] };
+const INV = { invited: ['orange', 'Invited'], registered: ['blue', 'Registered'], face_registered: ['brand', 'Face Registered'], active: ['green', 'Active'], admin: ['green', 'Registered'] };
 export const inviteChip = (s) => { const [c, l] = INV[s] || ['gray', s]; return `<span class="chip ${c}"><span class="dot"></span>${l}</span>`; };
 const VS = { travelling: ['blue', 'Travelling'], at_site: ['orange', 'Reached Site'], active: ['green', 'On Visit'], completed: ['teal', 'Completed'], cancelled: ['gray', 'Cancelled'] };
 export const visitChip = (s) => { const [c, l] = VS[s] || ['gray', s]; return `<span class="chip ${c}">${s === 'completed' ? icon('check') : '<span class="dot"></span>'}${l}</span>`; };
